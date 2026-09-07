@@ -481,8 +481,8 @@ div[data-testid="audio"] time {
 }
 
 .studio-compact-row {
-    display: flex !important;
-    flex-direction: row !important;
+    display: grid !important;
+    grid-template-columns: 46px 160px minmax(260px, 1.2fr) minmax(360px, 1fr) 75px !important;
     align-items: center !important;
     gap: 8px !important;
     padding: 2px 8px !important;
@@ -494,6 +494,7 @@ div[data-testid="audio"] time {
     max-height: 48px !important;
     height: 46px !important;
     box-sizing: border-box !important;
+    width: 100% !important;
     transition: background 0.15s ease !important;
 }
 
@@ -505,6 +506,8 @@ div[data-testid="audio"] time {
 .studio-compact-row > div {
     display: flex !important;
     align-items: center !important;
+    width: 100% !important;
+    min-width: 0 !important;
     border: none !important;
     background: transparent !important;
     box-shadow: none !important;
@@ -515,7 +518,8 @@ div[data-testid="audio"] time {
 .studio-compact-row .gradio-dropdown,
 .studio-compact-row .gradio-textbox,
 .studio-compact-row .gradio-audio,
-.studio-compact-row .gradio-html {
+.studio-compact-row .gradio-html,
+.studio-compact-row .block {
     border: none !important;
     background: transparent !important;
     box-shadow: none !important;
@@ -523,22 +527,24 @@ div[data-testid="audio"] time {
     margin: 0 !important;
 }
 
-.studio-compact-row .gradio-html {
-    flex: 4 1 0% !important;
+.studio-compact-row .html-container,
+.studio-compact-row .prose,
+.studio-compact-row .gradio-style,
+.studio-compact-row [class*="html-container"],
+.studio-compact-row [class*="prose"],
+.studio-compact-row > div:nth-child(4),
+.studio-compact-row > div:nth-child(4) > div,
+.studio-compact-row > div:nth-child(4) .html-container,
+.studio-compact-row > div:nth-child(4) .prose {
     width: 100% !important;
-    min-width: 160px !important;
-    display: flex !important;
-    align-items: center !important;
-}
-
-.studio-compact-row .gradio-html > div,
-.studio-compact-row .gradio-html .prose,
-.studio-compact-row .gradio-html .gradio-style {
-    width: 100% !important;
-    flex: 1 1 100% !important;
+    max-width: 100% !important;
     min-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
     display: flex !important;
+    flex: 1 1 100% !important;
     align-items: center !important;
+    box-sizing: border-box !important;
 }
 
 .studio-compact-row input,
@@ -636,13 +642,14 @@ div[data-testid="audio"] time {
     height: 32px !important;
     max-height: 32px !important;
     width: 100% !important;
-    min-width: 160px !important;
+    min-width: 100% !important;
     display: block !important;
     color-scheme: dark !important;
     background: #1e293b !important;
     border-radius: 6px !important;
     border: 1px solid rgba(148, 163, 184, 0.25) !important;
     outline: none !important;
+    box-sizing: border-box !important;
 }
 
 .studio-compact-row audio::-webkit-media-controls-panel {

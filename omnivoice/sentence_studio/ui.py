@@ -153,8 +153,8 @@ def create_sentence_studio_tab(
             border-color: rgba(148, 163, 184, 0.22) !important;
         }
         .studio-compact-row {
-            display: flex !important;
-            flex-direction: row !important;
+            display: grid !important;
+            grid-template-columns: 46px 160px minmax(260px, 1.2fr) minmax(360px, 1fr) 75px !important;
             align-items: center !important;
             gap: 8px !important;
             padding: 2px 8px !important;
@@ -166,6 +166,7 @@ def create_sentence_studio_tab(
             max-height: 48px !important;
             height: 46px !important;
             box-sizing: border-box !important;
+            width: 100% !important;
             transition: background 0.15s ease !important;
         }
         .studio-compact-row:nth-child(even) {
@@ -178,37 +179,44 @@ def create_sentence_studio_tab(
         .studio-compact-row > div {
             display: flex !important;
             align-items: center !important;
+            width: 100% !important;
+            min-width: 0 !important;
             border: none !important;
             background: transparent !important;
             box-shadow: none !important;
             padding: 0 !important;
             margin: 0 !important;
+            overflow: visible !important;
         }
         .studio-compact-row .gradio-dropdown,
         .studio-compact-row .gradio-textbox,
         .studio-compact-row .gradio-audio,
-        .studio-compact-row .gradio-html {
+        .studio-compact-row .gradio-html,
+        .studio-compact-row .block {
             border: none !important;
             background: transparent !important;
             box-shadow: none !important;
             padding: 0 !important;
             margin: 0 !important;
         }
-        .studio-compact-row .gradio-html {
-            flex: 4 1 0% !important;
+        .studio-compact-row .html-container,
+        .studio-compact-row .prose,
+        .studio-compact-row .gradio-style,
+        .studio-compact-row [class*="html-container"],
+        .studio-compact-row [class*="prose"],
+        .studio-compact-row > div:nth-child(4),
+        .studio-compact-row > div:nth-child(4) > div,
+        .studio-compact-row > div:nth-child(4) .html-container,
+        .studio-compact-row > div:nth-child(4) .prose {
             width: 100% !important;
-            min-width: 160px !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-        .studio-compact-row .gradio-html > div,
-        .studio-compact-row .gradio-html .prose,
-        .studio-compact-row .gradio-html .gradio-style {
-            width: 100% !important;
-            flex: 1 1 100% !important;
+            max-width: 100% !important;
             min-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
             display: flex !important;
+            flex: 1 1 100% !important;
             align-items: center !important;
+            box-sizing: border-box !important;
         }
         .studio-compact-row div[data-testid="audio"] {
             background: #0f172a !important;
@@ -286,13 +294,14 @@ def create_sentence_studio_tab(
             height: 32px !important;
             max-height: 32px !important;
             width: 100% !important;
-            min-width: 160px !important;
+            min-width: 100% !important;
             display: block !important;
             color-scheme: dark !important;
             background: #1e293b !important;
             border-radius: 6px !important;
             border: 1px solid rgba(148, 163, 184, 0.25) !important;
             outline: none !important;
+            box-sizing: border-box !important;
         }
         .studio-compact-row audio::-webkit-media-controls-panel {
             background-color: #1e293b !important;
@@ -456,7 +465,7 @@ def create_sentence_studio_tab(
                 with gr.Row():
                     studio_first_page_btn = gr.Button("⏮️ 首页" if is_zh else "⏮️ First", size="sm", min_width=50)
                     studio_prev_page_btn = gr.Button("◀ 上一页" if is_zh else "◀ Prev", size="sm", min_width=50)
-                    studio_page_info = gr.Markdown("📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)")
+                    studio_page_info = gr.Markdown("📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**")
                     studio_next_page_btn = gr.Button("下一页 ▶" if is_zh else "Next ▶", size="sm", min_width=50)
                     studio_last_page_btn = gr.Button("末页 ⏭️" if is_zh else "Last ⏭️", size="sm", min_width=50)
 
@@ -475,15 +484,15 @@ def create_sentence_studio_tab(
             if not wav_path or not os.path.isfile(wav_path):
                 empty_text = "等待生成..." if is_zh else "Waiting..."
                 return (
-                    f'<div style="font-size:12px; color:#64748b; padding-left:10px; '
-                    f'width:100%; min-width:160px; font-style:italic; display:flex; align-items:center; height:32px;">{empty_text}</div>'
+                    f'<div style="font-size:12px; color:#64748b; padding-left:6px; '
+                    f'width:100%; font-style:italic; display:flex; align-items:center; height:32px;">{empty_text}</div>'
                 )
             abs_path = os.path.abspath(wav_path).replace("\\", "/")
             return (
-                f'<div style="width:100%; display:flex; align-items:center; min-width:160px;">'
+                f'<div style="width:100%; display:flex; align-items:center; flex:1 1 100%; min-width:0;">'
                 f'<audio controls preload="metadata" src="/gradio_api/file={abs_path}" '
-                f'style="height:32px; width:100%; min-width:160px; color-scheme:dark; '
-                f'background:#1e293b; border-radius:6px; border:1px solid rgba(148,163,184,0.25);">'
+                f'style="height:32px; width:100%; min-width:100%; color-scheme:dark; '
+                f'background:#1e293b; border-radius:6px; border:1px solid rgba(148,163,184,0.25); outline:none; display:block;">'
                 f'</audio></div>'
             )
 
@@ -495,34 +504,35 @@ def create_sentence_studio_tab(
 
         role_choices = [follow_global_label] + saved_voices
 
-        # Single compact table header row with exact matching scales and padding
+        # Single compact table header row with exact matching grid columns
         with gr.Row(elem_classes=["studio-table-header", "studio-compact-row"]):
             gr.HTML(
-                f"<div style='min-width:36px;font-size:13px;font-weight:600;color:#94a3b8;text-align:center;'>{'序号' if is_zh else '#'}</div>",
-                scale=0,
+                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;text-align:center;width:100%;'>{'序号' if is_zh else '#'}</div>",
+                container=False,
             )
             gr.HTML(
-                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;padding-left:4px;'>{'分配角色' if is_zh else 'Role'}</div>",
-                scale=2,
+                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;padding-left:4px;width:100%;'>{'分配角色' if is_zh else 'Role'}</div>",
+                container=False,
             )
             gr.HTML(
-                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;padding-left:4px;'>{'台词文本 (单行直接可改)' if is_zh else 'Script Line (Editable)'}</div>",
-                scale=5,
+                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;padding-left:4px;width:100%;'>{'台词文本 (单行直接可改)' if is_zh else 'Script Line (Editable)'}</div>",
+                container=False,
             )
             gr.HTML(
-                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;padding-left:4px;'>{'试听预览' if is_zh else 'Audio Preview'}</div>",
-                scale=4,
+                f"<div style='font-size:13px;font-weight:600;color:#94a3b8;padding-left:4px;width:100%;'>{'试听预览' if is_zh else 'Audio Preview'}</div>",
+                container=False,
             )
             gr.HTML(
                 f"<div style='font-size:13px;font-weight:600;color:#94a3b8;text-align:center;width:100%;'>{'操作' if is_zh else 'Action'}</div>",
-                scale=1,
+                container=False,
             )
 
         with gr.Column():
             for i in range(MAX_STUDIO_ROWS):
                 with gr.Row(visible=False, elem_classes="studio-compact-row") as row_cont:
                     idx_label = gr.HTML(
-                        f"<div style='min-width:36px;font-size:13.5px;font-weight:700;color:#38bdf8;text-align:center;'>#{i+1:02d}</div>"
+                        f"<div style='min-width:36px;font-size:13.5px;font-weight:700;color:#38bdf8;text-align:center;'>#{i+1:02d}</div>",
+                        container=False,
                     )
                     sent_role = gr.Dropdown(
                         show_label=False,
@@ -542,6 +552,7 @@ def create_sentence_studio_tab(
                     )
                     sent_audio = gr.HTML(
                         value=_render_audio_html(None),
+                        container=False,
                         scale=4,
                     )
                     sent_regen = gr.Button(
@@ -656,9 +667,9 @@ def create_sentence_studio_tab(
                 row_updates.append(gr.update(visible=is_visible))
 
             info_text = (
-                f"📄 **第 {page} / {total_pages} 页** (共 {total_count} 句)"
+                f"📄 **第 {page} / {total_pages} 页**"
                 if is_zh
-                else f"📄 **Page {page} / {total_pages}** ({total_count} lines)"
+                else f"📄 **Page {page} / {total_pages}**"
             )
             return page, info_text, row_updates
 
@@ -717,7 +728,7 @@ def create_sentence_studio_tab(
                     if is_zh
                     else "<div style='font-size:13.5px; color:#f59e0b; padding: 4px 0;'>⚠️ Please enter text to split!</div>"
                 )
-                empty_res = [status, 1, 0, "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)"]
+                empty_res = [status, 1, 0, "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**"]
                 for _ in range(MAX_STUDIO_ROWS):
                     empty_res.extend([
                         gr.update(visible=False),
@@ -865,7 +876,7 @@ def create_sentence_studio_tab(
                     gr.update(visible=False),
                     1,
                     0,
-                    "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                    "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
                 ] + [gr.update() for _ in range(MAX_STUDIO_ROWS * 4)]
 
                 try:
@@ -877,7 +888,7 @@ def create_sentence_studio_tab(
                         gr.update(visible=False),
                         1,
                         0,
-                        "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                        "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
                     ] + [gr.update() for _ in range(MAX_STUDIO_ROWS * 4)]
                     return
             elif ref_audio:
@@ -886,7 +897,7 @@ def create_sentence_studio_tab(
                     gr.update(visible=False),
                     1,
                     0,
-                    "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                    "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
                 ] + [gr.update() for _ in range(MAX_STUDIO_ROWS * 4)]
 
                 try:
@@ -898,7 +909,7 @@ def create_sentence_studio_tab(
                         gr.update(visible=False),
                         1,
                         0,
-                        "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                        "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
                     ] + [gr.update() for _ in range(MAX_STUDIO_ROWS * 4)]
                     return
             else:
@@ -907,7 +918,7 @@ def create_sentence_studio_tab(
                     gr.update(visible=False),
                     1,
                     0,
-                    "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                    "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
                 ] + [gr.update() for _ in range(MAX_STUDIO_ROWS * 4)]
                 return
 
@@ -917,7 +928,7 @@ def create_sentence_studio_tab(
                     gr.update(visible=False),
                     1,
                     0,
-                    "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                    "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
                 ] + [gr.update() for _ in range(MAX_STUDIO_ROWS * 4)]
                 return
 
@@ -1313,7 +1324,7 @@ def create_sentence_studio_tab(
                 gr.update(value=None, visible=False),
                 1,
                 0,
-                "📄 **第 1 / 1 页** (共 0 句)" if is_zh else "📄 **Page 1 / 1** (0 lines)",
+                "📄 **第 1 / 1 页**" if is_zh else "📄 **Page 1 / 1**",
             ]
             for _ in range(MAX_STUDIO_ROWS):
                 resets.extend([
