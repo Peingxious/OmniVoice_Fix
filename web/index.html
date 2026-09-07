@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OmniVoice ✂️ 分句配音工作室 (Sentence Studio)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.prod.js"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eef2ff',
+              100: '#e0e7ff',
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            },
+            darkBg: '#090d16',
+            darkCard: '#0f172a',
+            darkInput: '#1e293b',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #090d16;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    /* Custom compact scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(99, 102, 241, 0.4);
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(129, 140, 248, 0.8);
+    }
+    /* Native audio styling */
+    audio {
+      height: 32px;
+      border-radius: 6px;
+      outline: none;
+    }
+    audio::-webkit-media-controls-panel {
+      background-color: #1e293b;
+    }
+    audio::-webkit-media-controls-current-time-display,
+    audio::-webkit-media-controls-time-remaining-display {
+      color: #cbd5e1;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-darkBg text-slate-100 antialiased p-4 md:p-6 selection:bg-indigo-500 selection:text-white">
+  <div id="app" class="max-w-7xl mx-auto space-y-5">
+
+    <!-- Header Hero Banner -->
+    <header class="bg-gradient-to-r from-indigo-950/70 via-purple-950/50 to-slate-900/80 border border-indigo-500/20 rounded-2xl p-5 shadow-2xl backdrop-blur-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div>
+        <div class="flex items-center gap-3">
+          <span class="text-2xl">✂️</span>
+          <h1 class="text-xl md:text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-200 to-indigo-200">
+            OmniVoice 分句配音工作室
+          </h1>
+          <span class="text-xs px-2.5 py-0.5 rounded-full font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+            Web 原生极简版
+          </span>
+        </div>
+        <p class="text-xs md:text-sm text-slate-400 mt-1.5 leading-relaxed">
+          长文按行智能清洗切分，逐句配音输出。全局及分句自由指定角色（如 <code class="text-indigo-300 font-mono">杨总.pt</code>），原生单行试听、单句微调重跑与真正一键 ZIP 直下。
+        </p>
+      </div>
+
+      <div class="flex items-center gap-3 self-end md:self-center">
+        <span class="inline-flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-3 py-1 rounded-full">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          FastAPI 服务就绪
+        </span>
+      </div>
+    </header>
+
+    <!-- Top Grid: Left Settings + Right Script Input -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+      <!-- Left Column: Voice & Tuning (4 Cols) -->
+      <div class="lg:col-span-4 space-y-4">
+        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg space-y-4">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800/80">
+            <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <span>👤</span> 角色与配音设置
+            </h2>
+            <button @click="fetchVoices" title="刷新角色" class="text-xs text-indigo-400 hover:text-indigo-300 transition flex items-center gap-1">
+              <span>🔄</span> 刷新
+            </button>
+          </div>
+
+          <!-- Role Selector -->
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">选择已训练角色 (.pt 文件)</label>
+            <select v-model="globalRole" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 transition">
+              <option v-for="v in voices" :key="v.filename" :value="v.filename">
+                {{ v.filename }}
+              </option>
+            </select>
+          </div>
+
+          <!-- Role Info Card -->
+          <div v-if="selectedVoiceInfo" class="bg-slate-900/80 border border-indigo-500/20 rounded-lg p-3 text-xs space-y-1.5 text-slate-300">
+            <div class="flex justify-between items-center text-slate-400">
+              <span>大小: <b class="text-slate-200 font-mono">{{ selectedVoiceInfo.size_kb }} KB</b></span>
+              <span>特征时长: <b class="text-indigo-300 font-mono">~{{ selectedVoiceInfo.est_seconds }}s</b></span>
+            </div>
+            <div class="text-slate-400">
+              参考 RMS: <b class="text-slate-200 font-mono">{{ selectedVoiceInfo.ref_rms }}</b>
+            </div>
+            <div v-if="selectedVoiceInfo.ref_text" class="pt-1 border-t border-slate-800/80 text-slate-400 text-[11px] truncate">
+              原声台词: <span class="italic text-slate-300">"{{ selectedVoiceInfo.ref_text }}"</span>
+            </div>
+          </div>
+
+          <!-- Language & Speed -->
+          <div class="grid grid-cols-2 gap-3 pt-1">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">发音语言</label>
+              <select v-model="targetLang" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+                <option value="Auto">Auto (自动)</option>
+                <option value="Chinese">Chinese (中文)</option>
+                <option value="English">English (英文)</option>
+                <option value="Cantonese">Cantonese (粤语)</option>
+                <option value="Japanese">Japanese (日语)</option>
+                <option value="Korean">Korean (韩语)</option>
+              </select>
+            </div>
+
+            <div>
+              <div class="flex justify-between text-xs font-medium text-slate-400 mb-1">
+                <span>语速倍率</span>
+                <span class="text-indigo-400 font-mono font-bold">{{ speed }}x</span>
+              </div>
+              <input type="range" v-model.number="speed" min="0.5" max="1.5" step="0.05" class="w-full accent-indigo-500 cursor-pointer h-2 bg-slate-700 rounded-lg mt-2" />
+            </div>
+          </div>
+
+          <!-- Emotion / Instruct -->
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">语气微调 / 情感控制 (可选)</label>
+            <input type="text" v-model="instruct" placeholder="例如: 亲切自然，沉稳大方" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Script Input & Actions (8 Cols) -->
+      <div class="lg:col-span-8 space-y-4">
+        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col justify-between h-full space-y-3">
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label class="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+                <span>📝</span> 输入长文台词
+              </label>
+              <span class="text-xs text-slate-400">换行优先分句，逗号等连句保持完整</span>
+            </div>
+            <textarea
+              v-model="rawScript"
+              rows="6"
+              placeholder="在此粘贴长篇台词...&#10;支持按行换行分句，一行就是一句话；&#10;标点中的逗号保持完整不硬拆；&#10;多余空行与杂乱空白会自动清洗对齐。"
+              class="w-full bg-darkInput border border-slate-700/80 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 font-sans leading-relaxed resize-y placeholder:text-slate-500"
+            ></textarea>
+          </div>
+
+          <!-- Action Buttons Bar -->
+          <div class="flex flex-wrap items-center gap-3 pt-1">
+            <button
+              @click="startBatchSynthesize"
+              :disabled="isGenerating || !rawScript.trim()"
+              class="flex-1 min-w-[200px] flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 text-white font-semibold py-2.5 px-5 rounded-lg shadow-lg shadow-indigo-600/30 transition transform active:scale-98 text-sm"
+            >
+              <span v-if="isGenerating" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+              <span v-else>🚀</span>
+              {{ isGenerating ? '正在逐句配音中...' : '一次性分开输出 (批量生成)' }}
+            </button>
+
+            <button
+              @click="splitOnly"
+              :disabled="isGenerating || !rawScript.trim()"
+              class="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white text-sm font-medium rounded-lg border border-slate-700 transition"
+            >
+              📝 仅切分预览
+            </button>
+
+            <button
+              @click="clearAll"
+              :disabled="isGenerating"
+              class="px-3.5 py-2.5 bg-slate-800/60 hover:bg-red-950/40 text-slate-400 hover:text-red-300 text-sm rounded-lg border border-slate-800 transition"
+              title="清空重置"
+            >
+              🗑️ 清空
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status & 1-Click ZIP Download Bar -->
+    <div class="bg-darkCard/80 border border-slate-800/80 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-md">
+      <!-- Status message & progress bar -->
+      <div class="flex-1 w-full space-y-2">
+        <div class="flex items-center justify-between text-xs">
+          <span class="font-medium text-slate-300 flex items-center gap-2">
+            <span v-if="isGenerating" class="text-indigo-400 animate-pulse">⏳</span>
+            <span v-else-if="downloadUrl" class="text-emerald-400">✅</span>
+            <span v-else class="text-slate-400">ℹ️</span>
+            {{ statusText }}
+          </span>
+          <span v-if="sentences.length" class="text-slate-400 font-mono">
+            {{ completedCount }} / {{ sentences.length }} 句
+          </span>
+        </div>
+        <!-- Progress track -->
+        <div v-if="sentences.length" class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+          <div
+            class="bg-gradient-to-r from-indigo-500 to-purple-500 h-1.5 transition-all duration-300"
+            :style="{ width: progressPercent + '%' }"
+          ></div>
+        </div>
+      </div>
+
+      <!-- Real 1-Click Native ZIP Download Button -->
+      <div class="flex items-center shrink-0">
+        <button
+          v-if="downloadUrl"
+          @click="directDownloadZip"
+          class="flex items-center gap-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold py-2 px-5 rounded-lg shadow-lg shadow-purple-600/30 transition transform hover:-translate-y-0.5 active:translate-y-0 text-sm"
+        >
+          <span>📦</span>
+          <span>一键下载全部音频 (ZIP)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Compact Sentence Table (High-Density Professional Studio Table) -->
+    <section class="bg-darkCard/95 border border-slate-700/80 rounded-xl overflow-hidden shadow-2xl">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs border-collapse">
+          <thead class="bg-slate-800/90 text-slate-300 font-semibold border-b border-slate-700 select-none">
+            <tr class="h-9">
+              <th class="w-12 px-3 text-center border-r border-slate-700/50">#</th>
+              <th class="w-48 px-3 border-r border-slate-700/50">分配角色</th>
+              <th class="px-3 border-r border-slate-700/50">台词文本 (点击单行可直接编辑)</th>
+              <th class="w-72 px-3 border-r border-slate-700/50">音频试听</th>
+              <th class="w-20 px-3 text-center">操作</th>
+            </tr>
+          </thead>
+
+          <tbody v-if="sentences.length === 0">
+            <tr>
+              <td colspan="5" class="py-14 text-center text-slate-500 text-sm">
+                <div class="text-3xl mb-2">📋</div>
+                请在上方粘贴台词，点击【一次性分开输出】即可全自动生成
+              </td>
+            </tr>
+          </tbody>
+
+          <tbody v-else class="divide-y divide-slate-800/80 font-sans">
+            <tr
+              v-for="item in paginatedSentences"
+              :key="item.index"
+              class="h-9 transition-colors duration-150 group"
+              :class="item.status === 'generating' ? 'bg-indigo-950/40' : (item.index % 2 === 0 ? 'bg-slate-900/40 hover:bg-slate-800/60' : 'bg-slate-900/80 hover:bg-slate-800/60')"
+            >
+              <!-- Index -->
+              <td class="w-12 px-2 text-center font-mono font-bold text-sky-400 border-r border-slate-800/60">
+                #{{ String(item.index).padStart(2, '0') }}
+              </td>
+
+              <!-- Role Select -->
+              <td class="w-48 px-2 border-r border-slate-800/60">
+                <select
+                  v-model="item.role"
+                  class="w-full bg-slate-800/90 hover:bg-slate-800 border border-slate-700/70 focus:border-indigo-500 rounded h-7 px-2 text-slate-200 focus:outline-none text-xs transition"
+                >
+                  <option value="跟随全局默认角色">跟随全局 ({{ globalRole }})</option>
+                  <option v-for="v in voices" :key="v.filename" :value="v.filename">
+                    {{ v.filename }}
+                  </option>
+                </select>
+              </td>
+
+              <!-- Inline Editable Script Line -->
+              <td class="px-2 border-r border-slate-800/60">
+                <input
+                  type="text"
+                  v-model="item.text"
+                  placeholder="台词内容..."
+                  class="w-full bg-transparent hover:bg-slate-800/70 focus:bg-slate-950 border border-transparent hover:border-slate-700/60 focus:border-indigo-500 rounded h-7 px-2 text-slate-100 focus:outline-none text-xs transition"
+                />
+              </td>
+
+              <!-- Audio Player -->
+              <td class="w-72 px-2 border-r border-slate-800/60">
+                <div v-if="item.status === 'generating'" class="flex items-center gap-1.5 text-indigo-400 text-xs py-1">
+                  <span class="w-3.5 h-3.5 border-2 border-indigo-400/30 border-t-indigo-400 rounded-full animate-spin"></span>
+                  <span>正在合成此句...</span>
+                </div>
+                <audio
+                  v-else-if="item.audio_url"
+                  controls
+                  :src="item.audio_url"
+                  preload="none"
+                  class="w-full h-7"
+                ></audio>
+                <span v-else class="text-slate-600 text-xs italic px-1">待合成</span>
+              </td>
+
+              <!-- Single Retry Button -->
+              <td class="w-20 px-2 text-center">
+                <button
+                  @click="retrySentence(item)"
+                  :disabled="item.status === 'generating' || isGenerating"
+                  class="w-full h-6 flex items-center justify-center gap-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-slate-300 hover:text-white rounded border border-slate-700 transition text-[11px] font-medium active:scale-95"
+                  title="单独重跑这句"
+                >
+                  <span>🔄</span>
+                  <span>重跑</span>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination Footer Bar -->
+      <div v-if="sentences.length > 0" class="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-2.5 bg-slate-800/70 border-t border-slate-700 text-xs text-slate-400 select-none">
+        <div class="flex items-center gap-3">
+          <span>
+            显示第 <b class="text-slate-200">{{ pageStartIndex + 1 }}</b> - <b class="text-slate-200">{{ pageEndIndex }}</b> 句，共 <b class="text-indigo-300">{{ sentences.length }}</b> 句
+          </span>
+          <div class="flex items-center gap-1.5 ml-2">
+            <span>每页:</span>
+            <select
+              v-model.number="pageSize"
+              @change="currentPage = 1"
+              class="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            >
+              <option :value="10">10 句 (默认)</option>
+              <option :value="20">20 句</option>
+              <option :value="50">50 句</option>
+              <option :value="100">100 句</option>
+              <option :value="99999">全部展开</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Page Navigation Buttons -->
+        <div v-if="totalPages > 1" class="flex items-center gap-1.5">
+          <button
+            @click="goToPage(1)"
+            :disabled="currentPage === 1"
+            class="px-2 py-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 rounded border border-slate-700 text-xs transition"
+            title="首页"
+          >
+            «
+          </button>
+          <button
+            @click="goToPage(currentPage - 1)"
+            :disabled="currentPage === 1"
+            class="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 rounded border border-slate-700 text-xs transition"
+          >
+            ‹ 上一页
+          </button>
+
+          <!-- Page numbers pill list -->
+          <div class="flex items-center gap-1 px-1">
+            <button
+              v-for="p in visiblePages"
+              :key="p"
+              @click="goToPage(p)"
+              class="w-7 h-7 flex items-center justify-center rounded text-xs font-medium transition"
+              :class="currentPage === p ? 'bg-indigo-600 text-white font-bold shadow' : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'"
+            >
+              {{ p }}
+            </button>
+          </div>
+
+          <button
+            @click="goToPage(currentPage + 1)"
+            :disabled="currentPage === totalPages"
+            class="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 rounded border border-slate-700 text-xs transition"
+          >
+            下一页 ›
+          </button>
+          <button
+            @click="goToPage(totalPages)"
+            :disabled="currentPage === totalPages"
+            class="px-2 py-1 bg-slate-900 hover:bg-slate-800 disabled:opacity-30 rounded border border-slate-700 text-xs transition"
+            title="末页"
+          >
+            »
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const voices = ref([]);
+        const globalRole = ref('');
+        const targetLang = ref('Auto');
+        const speed = ref(1.0);
+        const instruct = ref('');
+        const rawScript = ref('');
+
+        const sentences = ref([]);
+        const isGenerating = ref(false);
+        const statusText = ref('准备就绪：请选择角色并输入台词');
+        const downloadUrl = ref(null);
+        const currentTaskId = ref(null);
+
+        // Pagination state
+        const pageSize = ref(10); // Default 10 per page
+        const currentPage = ref(1);
+
+        const totalPages = computed(() => {
+          if (pageSize.value >= 99999) return 1;
+          return Math.ceil(sentences.value.length / pageSize.value) || 1;
+        });
+
+        const pageStartIndex = computed(() => {
+          return (currentPage.value - 1) * pageSize.value;
+        });
+
+        const pageEndIndex = computed(() => {
+          if (pageSize.value >= 99999) return sentences.value.length;
+          return Math.min(pageStartIndex.value + pageSize.value, sentences.value.length);
+        });
+
+        const paginatedSentences = computed(() => {
+          if (pageSize.value >= 99999) return sentences.value;
+          return sentences.value.slice(pageStartIndex.value, pageEndIndex.value);
+        });
+
+        const visiblePages = computed(() => {
+          const pages = [];
+          const total = totalPages.value;
+          const curr = currentPage.value;
+          let start = Math.max(1, curr - 2);
+          let end = Math.min(total, start + 4);
+          if (end - start < 4) {
+            start = Math.max(1, end - 4);
+          }
+          for (let i = start; i <= end; i++) {
+            pages.push(i);
+          }
+          return pages;
+        });
+
+        const goToPage = (p) => {
+          if (p >= 1 && p <= totalPages.value) {
+            currentPage.value = p;
+          }
+        };
+
+        // Computed voice info
+        const selectedVoiceInfo = computed(() => {
+          return voices.value.find(v => v.filename === globalRole.value);
+        });
+
+        // Computed progress
+        const completedCount = computed(() => {
+          return sentences.value.filter(s => s.status === 'done').length;
+        });
+
+        const progressPercent = computed(() => {
+          if (!sentences.value.length) return 0;
+          return Math.round((completedCount.value / sentences.value.length) * 100);
+        });
+
+        // 1. Fetch voices
+        const fetchVoices = async () => {
+          try {
+            const res = await fetch('/api/voices');
+            const data = await res.json();
+            voices.value = data.voices || [];
+            if (!globalRole.value && data.default) {
+              globalRole.value = data.default;
+            }
+          } catch (e) {
+            console.error('Fetch voices error:', e);
+            statusText.value = '⚠️ 无法获取角色列表，请确认后端已启动';
+          }
+        };
+
+        // 2. Split Only
+        const splitOnly = async () => {
+          if (!rawScript.value.trim()) return;
+          try {
+            const res = await fetch('/api/split', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: rawScript.value })
+            });
+            const data = await res.json();
+            sentences.value = (data.sentences || []).map((s, idx) => ({
+              index: idx + 1,
+              text: s,
+              role: '跟随全局默认角色',
+              status: 'pending',
+              audio_url: null,
+              duration: 0,
+            }));
+            currentPage.value = 1;
+            statusText.value = `✅ 已清洗切分为 ${sentences.value.length} 句话，可在下方调整后批量生成。`;
+            downloadUrl.value = null;
+          } catch (e) {
+            console.error('Split error:', e);
+            statusText.value = '❌ 文本切分失败: ' + e.message;
+          }
+        };
+
+        // 3. Batch Synthesize via SSE
+        const startBatchSynthesize = async () => {
+          if (!rawScript.value.trim()) return;
+
+          // Split if not already split
+          if (!sentences.value.length) {
+            await splitOnly();
+          }
+
+          if (!sentences.value.length) return;
+
+          isGenerating.value = true;
+          downloadUrl.value = null;
+          statusText.value = `🚀 正在启动批量配音，共 ${sentences.value.length} 句...`;
+
+          // Mark all pending
+          sentences.value.forEach(s => {
+            if (s.status !== 'done') s.status = 'pending';
+          });
+
+          try {
+            const payload = {
+              sentences: sentences.value.map(s => ({
+                index: s.index,
+                text: s.text,
+                role: s.role
+              })),
+              global_role: globalRole.value,
+              speed: speed.value,
+              instruct: instruct.value,
+              lang: targetLang.value
+            };
+
+            const response = await fetch('/api/synthesize_batch', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+              const err = await response.json();
+              throw new Error(err.detail || '请求失败');
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n\n');
+              buffer = lines.pop(); // Keep incomplete chunk
+
+              for (const block of lines) {
+                if (!block.trim()) continue;
+                const matchEvent = block.match(/event:\s*(\w+)/);
+                const matchData = block.match(/data:\s*(.+)/);
+                if (!matchEvent || !matchData) continue;
+
+                const eventType = matchEvent[1];
+                const data = JSON.parse(matchData[1]);
+
+                if (eventType === 'start') {
+                  currentTaskId.value = data.task_id;
+                } else if (eventType === 'progress') {
+                  const target = sentences.value.find(s => s.index === data.index);
+                  if (target) target.status = 'generating';
+                  statusText.value = `🎙️ 正在合成第 ${data.index} 句...`;
+                } else if (eventType === 'sentence') {
+                  const target = sentences.value.find(s => s.index === data.index);
+                  if (target) {
+                    target.status = data.status;
+                    target.audio_url = data.audio_url;
+                    target.duration = data.duration;
+                  }
+                } else if (eventType === 'done') {
+                  downloadUrl.value = data.download_url;
+                  statusText.value = `🎉 全篇合成完毕！共 ${data.total} 句，总时长 ${data.total_duration}秒。点击右侧直接下载 ZIP。`;
+                } else if (eventType === 'error') {
+                  throw new Error(data.error || '合成异常');
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Batch error:', e);
+            statusText.value = '❌ 配音失败: ' + e.message;
+          } finally {
+            isGenerating.value = false;
+          }
+        };
+
+        // 4. Retry Single Sentence
+        const retrySentence = async (item) => {
+          if (!item.text.trim()) return;
+          item.status = 'generating';
+          statusText.value = `🔄 正在重跑第 #${item.index} 句...`;
+
+          try {
+            const taskId = currentTaskId.value || 'temp_' + Date.now();
+            currentTaskId.value = taskId;
+
+            const res = await fetch('/api/synthesize_single', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                task_id: taskId,
+                index: item.index,
+                text: item.text,
+                role: item.role,
+                speed: speed.value,
+                instruct: instruct.value,
+                lang: targetLang.value
+              })
+            });
+
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.detail || '重跑失败');
+            }
+
+            const data = await res.json();
+            item.status = 'done';
+            item.audio_url = data.audio_url;
+            item.duration = data.duration;
+            downloadUrl.value = data.download_url;
+            statusText.value = `✅ 第 #${item.index} 句重跑完成！时长 ${data.duration}秒。`;
+          } catch (e) {
+            console.error('Retry error:', e);
+            item.status = 'error';
+            statusText.value = `❌ 第 #${item.index} 句重跑失败: ` + e.message;
+          }
+        };
+
+        // 5. Direct 1-Click Native Browser Download
+        const directDownloadZip = () => {
+          if (!downloadUrl.value) return;
+          // Standard browser file download without any intermediary cards or modals
+          window.location.href = downloadUrl.value;
+        };
+
+        // 6. Clear All
+        const clearAll = () => {
+          rawScript.value = '';
+          sentences.value = [];
+          currentPage.value = 1;
+          downloadUrl.value = null;
+          statusText.value = '已清空重置。';
+        };
+
+        onMounted(() => {
+          fetchVoices();
+        });
+
+        return {
+          voices,
+          globalRole,
+          targetLang,
+          speed,
+          instruct,
+          rawScript,
+          sentences,
+          isGenerating,
+          statusText,
+          downloadUrl,
+          selectedVoiceInfo,
+          completedCount,
+          progressPercent,
+          pageSize,
+          currentPage,
+          totalPages,
+          pageStartIndex,
+          pageEndIndex,
+          paginatedSentences,
+          visiblePages,
+          goToPage,
+          fetchVoices,
+          splitOnly,
+          startBatchSynthesize,
+          retrySentence,
+          directDownloadZip,
+          clearAll
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

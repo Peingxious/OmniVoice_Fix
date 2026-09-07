@@ -1,0 +1,40 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+.env
+.DS_Store
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.so
+/.cache*
+/exp*/
+/.tmp/
+/results/
+/data/
+/download
+/local/
+/run*
+example.py
+results/
+examples/data*
+examples/download*
+examples/exp*
+.claude/
+*.wav
+*.jsonl
+
+# Saved voice clone prompts (generated at runtime)
+/voices/
+
+# Local UI settings (per-machine interface language)
+settings.json
+
+# Logs
+/logs/
+*.log
