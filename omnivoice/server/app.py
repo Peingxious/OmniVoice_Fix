@@ -23,7 +23,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,12 +32,13 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from omnivoice import OmniVoice, VoiceClonePrompt
+from omnivoice import OmniVoice, OmniVoiceGenerationConfig, VoiceClonePrompt
 from omnivoice.sentence_studio.engine import SentenceStudioEngine
 from omnivoice.sentence_studio.models import SentenceItem
 from omnivoice.sentence_studio.packager import pack_sentence_audio_zip
 from omnivoice.sentence_studio.text_processor import clean_and_split_text
 from omnivoice.utils.common import get_best_device
+from omnivoice.utils.lang_map import LANG_NAMES, lang_display_name
 
 logger = logging.getLogger("omnivoice.server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -71,6 +72,9 @@ def get_model() -> OmniVoice:
             device_map=device,
             dtype=torch.float16,
             load_asr=False,
+            asr_model_name=os.environ.get(
+                "OMNIVOICE_ASR_MODEL", "openai/whisper-large-v3-turbo"
+            ),
         )
         logger.info("OmniVoice model loaded successfully.")
     return _GLOBAL_MODEL
@@ -124,6 +128,14 @@ class SingleSynthesizeRequest(BaseModel):
     lang: Optional[str] = None
 
 
+class DesignGenerateRequest(BaseModel):
+    text: str
+    attributes: List[str] = Field(default_factory=list)
+    lang: Optional[str] = None
+    speed: float = 1.0
+    class_temperature: float = 0.35
+
+
 # ---------------------------------------------------------------------------
 # Helper Functions
 # ---------------------------------------------------------------------------
@@ -138,6 +150,82 @@ def _resolve_pt_path(filename: Optional[str]) -> Optional[str]:
     if os.path.isfile(candidate):
         return candidate
     return None
+
+
+def _clean_role_name(raw: str) -> str:
+    name = os.path.basename(raw or "")
+    name = re.sub(r'[\\/:*?"<>|]', "", name).strip().rstrip(".")
+    if not name:
+        name = "voice_" + time.strftime("%Y%m%d_%H%M%S")
+    if not name.endswith(".pt"):
+        name += ".pt"
+    return name
+
+
+def _unique_voice_path(name: str) -> str:
+    path = os.path.join(VOICE_DIR, name)
+    if not os.path.exists(path):
+        return path
+    stem = name[:-3]
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    return os.path.join(VOICE_DIR, f"{stem}_{stamp}.pt")
+
+
+def _save_generated_wave(waveform, sampling_rate: int) -> Dict[str, Any]:
+    """Persist a generated waveform under .cache/tmp/<task>/ and return its URL info."""
+    if hasattr(waveform, "cpu"):
+        waveform = waveform.cpu().numpy()
+    if waveform.ndim > 1:
+        waveform = waveform.squeeze()
+    task_id = uuid.uuid4().hex[:8]
+    task_dir = os.path.join(CACHE_TMP_DIR, task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    filename = "01.wav"
+    int16_wave = (np.clip(waveform, -1.0, 1.0) * 32767).astype(np.int16)
+    sf.write(os.path.join(task_dir, filename), int16_wave, sampling_rate)
+    duration = round(len(waveform) / sampling_rate, 2)
+    return {
+        "task_id": task_id,
+        "audio_url": f"/api/audio/{task_id}/{filename}",
+        "duration": duration,
+    }
+
+
+def _generate_once(
+    model: OmniVoice,
+    text: str,
+    lang: Optional[str],
+    speed: float,
+    class_temperature: float,
+    instruct: Optional[str] = None,
+    voice_clone_prompt: Any = None,
+) -> Any:
+    """Single-shot generation mirroring demo.py defaults (32 steps, gs 2.0)."""
+    raw_text = text.strip()
+    chunk_thresh = 15.0 if (len(raw_text) > 120 or raw_text.count("\n") >= 2) else 25.0
+    gen_config = OmniVoiceGenerationConfig(
+        num_step=32,
+        guidance_scale=2.0,
+        denoise=True,
+        preprocess_prompt=True,
+        postprocess_output=True,
+        class_temperature=float(class_temperature),
+        audio_chunk_duration=12.0,
+        audio_chunk_threshold=chunk_thresh,
+    )
+    kw: Dict[str, Any] = dict(
+        text=raw_text,
+        language=None if lang in (None, "Auto", "auto") else lang,
+        generation_config=gen_config,
+    )
+    if voice_clone_prompt is not None:
+        kw["voice_clone_prompt"] = voice_clone_prompt
+    if speed and float(speed) != 1.0:
+        kw["speed"] = float(speed)
+    if instruct and instruct.strip():
+        kw["instruct"] = instruct.strip()
+    auds = model.generate(**kw)
+    return auds[0]
 
 
 def _get_voice_info(filename: str) -> Dict[str, Any]:
@@ -206,8 +294,17 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
     @app.get("/api/audio/{task_id}/{filename}")
     def get_audio_file(task_id: str, filename: str):
         """Serve individual generated WAV audio file."""
+        # Task ids are server-generated hex; filenames may legitimately contain
+        # CJK characters (role names / sentence text), so only block traversal.
         safe_task = re.sub(r"[^a-zA-Z0-9_\-]", "", task_id)
-        safe_filename = re.sub(r"[^a-zA-Z0-9_\-\.]", "", filename)
+        safe_filename = os.path.basename(filename.replace("\\", "/"))
+        if (
+            not safe_task
+            or safe_task != task_id
+            or not safe_filename
+            or safe_filename in (".", "..")
+        ):
+            raise HTTPException(status_code=400, detail="Invalid audio path")
         file_path = os.path.join(CACHE_TMP_DIR, safe_task, safe_filename)
         if not os.path.isfile(file_path):
             raise HTTPException(status_code=404, detail="Audio file not found")
@@ -464,7 +561,218 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
             logger.error(f"Failed to regenerate sentence #{req.index}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
-    # 7. Mount Static Web Frontend
+    # 7. Upload an existing .pt voice file
+    @app.post("/api/upload_voice")
+    async def upload_voice(file: UploadFile = File(...)):
+        """Save an uploaded .pt voice prompt into voices/."""
+        if not file.filename or not file.filename.lower().endswith(".pt"):
+            raise HTTPException(status_code=400, detail="仅支持上传 .pt 角色文件。")
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="上传文件为空。")
+        dest = _unique_voice_path(_clean_role_name(file.filename))
+        with open(dest, "wb") as f:
+            f.write(content)
+        try:
+            VoiceClonePrompt.load(dest)
+        except Exception as e:
+            os.remove(dest)
+            raise HTTPException(status_code=400, detail=f"无效的 .pt 角色文件: {e}")
+        logger.info(f"Voice uploaded: {os.path.basename(dest)}")
+        return _get_voice_info(os.path.basename(dest))
+
+    # 8. Create & save a new voice from uploaded reference audio
+    @app.post("/api/create_voice")
+    async def create_voice(
+        file: UploadFile = File(...),
+        name: Optional[str] = Form(None),
+        ref_text: Optional[str] = Form(None),
+    ):
+        """Clone a reusable .pt voice prompt from a reference audio upload."""
+        suffix = os.path.splitext(file.filename or "ref.wav")[1].lower()
+        if suffix not in (".wav", ".mp3", ".flac", ".ogg", ".opus"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的音频格式 {suffix}，请使用 wav / mp3 / flac / ogg。",
+            )
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="上传音频为空。")
+        tmp_path = os.path.join(
+            CACHE_TMP_DIR, f"ref_upload_{uuid.uuid4().hex[:8]}{suffix}"
+        )
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        try:
+            model = get_model()
+            # ASR auto-transcription (when ref_text is empty) may load Whisper on
+            # first use, which is slow — run off the event loop.
+            prompt = await asyncio.to_thread(
+                model.create_voice_clone_prompt,
+                tmp_path,
+                (ref_text or "").strip() or None,
+            )
+            dest = _unique_voice_path(
+                _clean_role_name(name or os.path.splitext(file.filename or "")[0])
+            )
+            prompt.save(dest)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Voice creation failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"音色创建失败: {e}")
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        logger.info(f"Voice created: {os.path.basename(dest)}")
+        return _get_voice_info(os.path.basename(dest))
+
+    # 9. Voice design attribute catalog (kept in sync with the Gradio demo)
+    @app.get("/api/design_categories")
+    def design_categories():
+        """Speaker attribute groups for the voice design tab."""
+        from omnivoice.cli.i18n import CATEGORIES
+
+        cats = []
+        for cat in CATEGORIES:
+            cats.append(
+                {
+                    "key": cat["key"],
+                    "label": cat["label"]["zh"],
+                    "info": (cat.get("info") or {}).get("zh"),
+                    "options": [
+                        {"label": o["zh"], "value": o["value"]} for o in cat["options"]
+                    ],
+                }
+            )
+        return {"categories": cats}
+
+    # 10. Supported target languages (600+, mirrors the Gradio demo list)
+    @app.get("/api/languages")
+    def list_languages():
+        langs = ["Auto"] + sorted(lang_display_name(n) for n in LANG_NAMES)
+        return {"languages": langs}
+
+    # 11. Whisper ASR transcription of a reference audio upload
+    @app.post("/api/asr_transcribe")
+    async def asr_transcribe(file: UploadFile = File(...)):
+        suffix = os.path.splitext(file.filename or "ref.wav")[1].lower()
+        if suffix not in (".wav", ".mp3", ".flac", ".ogg", ".opus"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的音频格式 {suffix}，请使用 wav / mp3 / flac / ogg。",
+            )
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="上传音频为空。")
+        tmp_path = os.path.join(
+            CACHE_TMP_DIR, f"asr_{uuid.uuid4().hex[:8]}{suffix}"
+        )
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        try:
+            model = get_model()
+            # transcribe() raises if the Whisper pipe was never loaded
+            # (from_pretrained runs with load_asr=False) — lazy-load it here,
+            # mirroring create_voice_clone_prompt's on-the-fly behaviour.
+            if model._asr_pipe is None:
+                await asyncio.to_thread(model.load_asr_model)
+            text = await asyncio.to_thread(model.transcribe, tmp_path)
+            return {"text": (text or "").strip()}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"ASR transcribe failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"转写失败: {e}")
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    # 12. Voice clone: generate from uploaded reference audio
+    @app.post("/api/clone_generate")
+    async def clone_generate(
+        file: UploadFile = File(...),
+        text: str = Form(...),
+        ref_text: Optional[str] = Form(None),
+        lang: Optional[str] = Form(None),
+        speed: float = Form(1.0),
+        instruct: Optional[str] = Form(None),
+        class_temperature: float = Form(0.35),
+    ):
+        """Clone-synthesize target text with a temporary reference audio prompt."""
+        suffix = os.path.splitext(file.filename or "ref.wav")[1].lower()
+        if suffix not in (".wav", ".mp3", ".flac", ".ogg", ".opus"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的音频格式 {suffix}，请使用 wav / mp3 / flac / ogg。",
+            )
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="上传音频为空。")
+        tmp_path = os.path.join(
+            CACHE_TMP_DIR, f"ref_upload_{uuid.uuid4().hex[:8]}{suffix}"
+        )
+        with open(tmp_path, "wb") as f:
+            f.write(content)
+        try:
+            model = get_model()
+            prompt = await asyncio.to_thread(
+                model.create_voice_clone_prompt,
+                tmp_path,
+                (ref_text or "").strip() or None,
+            )
+            waveform = await asyncio.to_thread(
+                _generate_once,
+                model,
+                text,
+                lang,
+                speed,
+                class_temperature,
+                instruct,
+                prompt,
+            )
+            return _save_generated_wave(waveform, model.sampling_rate)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Clone generation failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"克隆合成失败: {e}")
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    # 13. Voice design: generate from attribute tags (no reference audio)
+    @app.post("/api/design_generate")
+    async def design_generate(req: DesignGenerateRequest):
+        """Design-synthesize text from speaker attribute tags."""
+        if not req.text.strip():
+            raise HTTPException(status_code=400, detail="合成文本不能为空。")
+        instruct = ", ".join(a.strip() for a in req.attributes if a.strip()) or None
+        try:
+            model = get_model()
+            waveform = await asyncio.to_thread(
+                _generate_once,
+                model,
+                req.text,
+                req.lang,
+                req.speed,
+                req.class_temperature,
+                instruct,
+            )
+            return _save_generated_wave(waveform, model.sampling_rate)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Design generation failed: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"声音设计合成失败: {e}")
+
+    # 14. Mount Static Web Frontend
     if os.path.isdir(WEB_DIR):
         app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
 

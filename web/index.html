@@ -81,7 +81,7 @@
           </span>
         </div>
         <p class="text-xs md:text-sm text-slate-400 mt-1.5 leading-relaxed">
-          长文按行智能清洗切分，逐句配音输出。全局及分句自由指定角色（如 <code class="text-indigo-300 font-mono">杨总.pt</code>），原生单行试听、单句微调重跑与真正一键 ZIP 直下。
+          声音克隆、分句配音与声音设计三合一工作台。克隆上传参考音频即可保存专属角色（如 <code class="text-indigo-300 font-mono">杨总.pt</code>），分句逐句试听与一键 ZIP，设计模式自由组合属性定制虚拟音色。
         </p>
       </div>
 
@@ -93,6 +93,213 @@
       </div>
     </header>
 
+    <!-- Area Tabs: Clone / Studio / Design -->
+    <nav class="flex flex-wrap items-center gap-1.5 bg-darkCard/80 border border-slate-800 rounded-xl p-1.5 shadow-md">
+      <button
+        v-for="t in tabs"
+        :key="t.key"
+        @click="activeTab = t.key"
+        class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition"
+        :class="activeTab === t.key
+          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-600/30'
+          : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/70'"
+      >
+        <span>{{ t.icon }}</span>
+        <span>{{ t.label }}</span>
+      </button>
+    </nav>
+
+    <!-- ===================== Area 1: Voice Clone ===================== -->
+    <section v-show="activeTab === 'clone'" class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+      <!-- Left: reference audio & role saving -->
+      <div class="lg:col-span-4 space-y-4">
+        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg space-y-3">
+          <div class="pb-2 border-b border-slate-800/80">
+            <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <span>🎙️</span> 参考音频设置
+            </h2>
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">上传 / 录制参考音频 (推荐 5~15 秒纯净干声)</label>
+            <input
+              id="cloneTabAudioInput"
+              type="file"
+              accept="audio/*,.wav,.mp3,.flac,.ogg"
+              @change="cloneTabFile = $event.target.files[0]"
+              :disabled="cloneBusy"
+              class="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:text-white file:text-xs file:font-semibold file:cursor-pointer hover:file:bg-indigo-500 disabled:opacity-50 cursor-pointer transition"
+            />
+            <div class="flex flex-wrap items-center gap-2 mt-1.5">
+              <button
+                @click="toggleRecording('clone')"
+                :disabled="cloneBusy || (recActive && recTarget !== 'clone')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] border transition"
+                :class="recActive && recTarget === 'clone'
+                  ? 'bg-red-600 border-red-500 text-white font-semibold animate-pulse'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-300 hover:text-white'"
+              >
+                <span>{{ recActive && recTarget === 'clone' ? '⏹' : '🎤' }}</span>
+                <span>{{ recActive && recTarget === 'clone' ? `停止录音 (${recElapsed}s)` : '麦克风录音' }}</span>
+              </button>
+              <button
+                @click="transcribeRef('clone')"
+                :disabled="cloneBusy || !cloneTabFile || (recActive && recTarget === 'clone')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] border bg-slate-800/60 border-slate-700 text-slate-300 hover:text-white disabled:opacity-40 transition"
+                title="Whisper ASR 自动转写参考音频台词"
+              >
+                <span>🪄</span>
+                <span>自动识别台词</span>
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">参考音频台词 (可选，留空自动转写)</label>
+            <input
+              type="text"
+              v-model="cloneTabRefText"
+              placeholder="例如: 我想去China看看长城。"
+              :disabled="cloneBusy"
+              class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+            />
+          </div>
+
+          <div class="pt-1 border-t border-slate-800/80 space-y-2">
+            <label class="block text-xs font-medium text-slate-400">保存为可复用角色</label>
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                v-model="cloneTabSaveName"
+                placeholder="角色名，例如: 杨总"
+                :disabled="cloneBusy"
+                class="flex-1 bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+              />
+              <button
+                @click="saveCloneRole"
+                :disabled="cloneBusy || !cloneTabFile"
+                class="shrink-0 flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-semibold py-1.5 px-3 rounded-lg transition text-xs"
+              >
+                <span>💾</span> 保存角色
+              </button>
+            </div>
+            <p class="text-[11px] text-slate-500 leading-relaxed">保存后自动进入全局角色库，可在「分句配音工作室」直接调用。</p>
+          </div>
+
+          <div v-if="cloneTabStatus" class="text-[11px] leading-relaxed" :class="cloneTabStatus.startsWith('❌') ? 'text-red-300' : 'text-emerald-300'">
+            {{ cloneTabStatus }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: target text & generation -->
+      <div class="lg:col-span-8 space-y-4">
+        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg space-y-3">
+          <div>
+            <div class="flex justify-between items-center mb-1.5">
+              <label class="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+                <span>📝</span> 待合成的目标文本
+              </label>
+            </div>
+            <textarea
+              v-model="cloneTabText"
+              rows="5"
+              placeholder="输入要用参考音色朗读的文本...&#10;支持长文本，超过约 12 秒会自动分块无缝拼接。"
+              class="w-full bg-darkInput border border-slate-700/80 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 leading-relaxed resize-y placeholder:text-slate-500"
+            ></textarea>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-[11px] text-slate-500">快捷:</span>
+            <button
+              v-for="q in langQuick"
+              :key="q.v"
+              @click="cloneTabLang = q.v"
+              class="px-2.5 py-1 rounded-md text-[11px] border transition"
+              :class="cloneTabLang === q.v ? 'bg-indigo-600 border-indigo-500 text-white font-semibold' : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-white'"
+            >
+              {{ q.label }}
+            </button>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">发音语言 (⭐ 收藏常用 · 600+ 全量)</label>
+              <div class="flex items-center gap-1.5">
+                <select v-model="cloneTabLang" class="flex-1 min-w-0 bg-darkInput border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+                  <optgroup label="⭐ 常用语种">
+                    <option v-for="l in pinnedLangs" :key="'pin_' + l" :value="l">{{ l === 'Auto' ? '🌐 Auto (自动)' : l }}</option>
+                  </optgroup>
+                  <optgroup label="全部语言 (600+)">
+                    <option v-for="l in restLangs" :key="l" :value="l">{{ l }}</option>
+                  </optgroup>
+                </select>
+                <button
+                  @click="toggleStarLang(cloneTabLang)"
+                  :disabled="cloneTabLang === 'Auto'"
+                  :title="isLangStarred(cloneTabLang) ? '从常用语种移除' : '把当前语种加入常用'"
+                  class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md border text-sm transition"
+                  :class="isLangStarred(cloneTabLang) ? 'bg-amber-500/20 border-amber-500/50 text-amber-300' : 'bg-slate-800/60 border-slate-700 text-slate-500 hover:text-amber-300'"
+                >{{ isLangStarred(cloneTabLang) ? '⭐' : '☆' }}</button>
+              </div>
+            </div>
+            <div>
+              <div class="flex justify-between text-xs font-medium text-slate-400 mb-1">
+                <span>语速</span>
+                <span class="text-indigo-400 font-mono font-bold">{{ cloneTabSpeed }}x</span>
+              </div>
+              <input type="range" v-model.number="cloneTabSpeed" min="0.5" max="1.5" step="0.05" class="w-full accent-indigo-500 cursor-pointer h-2 bg-slate-700 rounded-lg mt-2" />
+            </div>
+            <div>
+              <div class="flex justify-between text-xs font-medium text-slate-400 mb-1">
+                <span>🎭 抑扬顿挫</span>
+                <span class="text-indigo-400 font-mono font-bold">{{ cloneTabDyn }}</span>
+              </div>
+              <input type="range" v-model.number="cloneTabDyn" min="0" max="0.8" step="0.05" class="w-full accent-indigo-500 cursor-pointer h-2 bg-slate-700 rounded-lg mt-2" />
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-[11px] text-slate-500">预设:</span>
+            <button
+              v-for="p in dynPresets"
+              :key="p.v"
+              @click="cloneTabDyn = p.v"
+              class="px-2.5 py-1 rounded-md text-[11px] border transition"
+              :class="cloneTabDyn === p.v ? 'bg-indigo-600 border-indigo-500 text-white font-semibold' : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-white'"
+            >
+              {{ p.label }} ({{ p.v }})
+            </button>
+          </div>
+
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">语气微调 / 情感控制 (可选)</label>
+            <input type="text" v-model="cloneTabInstruct" placeholder="例如: 亲切自然，沉稳大方" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500" />
+          </div>
+
+          <div class="flex items-center gap-3 pt-1">
+            <button
+              @click="generateClone"
+              :disabled="cloneBusy || !cloneTabText.trim() || !cloneTabFile"
+              class="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 text-white font-semibold py-2.5 px-5 rounded-lg shadow-lg shadow-indigo-600/30 transition text-sm"
+            >
+              <span v-if="cloneBusy" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+              <span v-else>🚀</span>
+              {{ cloneBusy ? '正在合成中...' : '生成试听' }}
+            </button>
+          </div>
+
+          <!-- Clone result -->
+          <div v-if="cloneResult" class="bg-slate-900/80 border border-indigo-500/20 rounded-lg p-3 flex items-center gap-3">
+            <audio controls :src="cloneResult.audio_url" preload="auto" class="flex-1 h-8"></audio>
+            <span class="text-[11px] text-slate-400 font-mono shrink-0">{{ cloneResult.duration }}s</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== Area 2: Sentence Studio ===================== -->
+    <div v-show="activeTab === 'studio'" class="space-y-5">
     <!-- Top Grid: Left Settings + Right Script Input -->
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
 
@@ -135,15 +342,24 @@
           <!-- Language & Speed -->
           <div class="grid grid-cols-2 gap-3 pt-1">
             <div>
-              <label class="block text-xs font-medium text-slate-400 mb-1">发音语言</label>
-              <select v-model="targetLang" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
-                <option value="Auto">Auto (自动)</option>
-                <option value="Chinese">Chinese (中文)</option>
-                <option value="English">English (英文)</option>
-                <option value="Cantonese">Cantonese (粤语)</option>
-                <option value="Japanese">Japanese (日语)</option>
-                <option value="Korean">Korean (韩语)</option>
-              </select>
+              <label class="block text-xs font-medium text-slate-400 mb-1">发音语言 (⭐ 收藏常用 · 600+ 全量)</label>
+              <div class="flex items-center gap-1.5">
+                <select v-model="targetLang" class="flex-1 min-w-0 bg-darkInput border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+                  <optgroup label="⭐ 常用语种">
+                    <option v-for="l in pinnedLangs" :key="'pin_' + l" :value="l">{{ l === 'Auto' ? '🌐 Auto (自动)' : l }}</option>
+                  </optgroup>
+                  <optgroup label="全部语言 (600+)">
+                    <option v-for="l in restLangs" :key="l" :value="l">{{ l }}</option>
+                  </optgroup>
+                </select>
+                <button
+                  @click="toggleStarLang(targetLang)"
+                  :disabled="targetLang === 'Auto'"
+                  :title="isLangStarred(targetLang) ? '从常用语种移除' : '把当前语种加入常用'"
+                  class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md border text-sm transition"
+                  :class="isLangStarred(targetLang) ? 'bg-amber-500/20 border-amber-500/50 text-amber-300' : 'bg-slate-800/60 border-slate-700 text-slate-500 hover:text-amber-300'"
+                >{{ isLangStarred(targetLang) ? '⭐' : '☆' }}</button>
+              </div>
             </div>
 
             <div>
@@ -159,6 +375,90 @@
           <div>
             <label class="block text-xs font-medium text-slate-400 mb-1">语气微调 / 情感控制 (可选)</label>
             <input type="text" v-model="instruct" placeholder="例如: 亲切自然，沉稳大方" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500" />
+          </div>
+        </div>
+
+        <!-- Voice Management: Upload .pt / Clone from Reference Audio -->
+        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg space-y-3">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-800/80">
+            <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <span>🎭</span> 角色管理 · 上传与保存
+            </h2>
+          </div>
+
+          <!-- 1. Upload existing .pt -->
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1.5">① 上传已有角色文件 (.pt)</label>
+            <input
+              type="file"
+              accept=".pt"
+              @change="uploadPtFile($event)"
+              :disabled="voiceBusy"
+              class="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-indigo-600 file:text-white file:text-xs file:font-semibold file:cursor-pointer hover:file:bg-indigo-500 disabled:opacity-50 cursor-pointer transition"
+            />
+          </div>
+
+          <!-- 2. Clone from reference audio -->
+          <div class="pt-1 border-t border-slate-800/80 space-y-2">
+            <label class="block text-xs font-medium text-slate-400">② 上传 / 录制参考音频，克隆并保存新角色</label>
+            <input
+              id="cloneAudioInput"
+              type="file"
+              accept="audio/*,.wav,.mp3,.flac,.ogg"
+              @change="cloneAudioFile = $event.target.files[0]"
+              :disabled="voiceBusy"
+              class="block w-full text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-700 file:text-slate-100 file:text-xs file:font-medium file:cursor-pointer hover:file:bg-slate-600 disabled:opacity-50 cursor-pointer transition"
+            />
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                @click="toggleRecording('studio')"
+                :disabled="voiceBusy || (recActive && recTarget !== 'studio')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] border transition"
+                :class="recActive && recTarget === 'studio'
+                  ? 'bg-red-600 border-red-500 text-white font-semibold animate-pulse'
+                  : 'bg-slate-800/60 border-slate-700 text-slate-300 hover:text-white'"
+              >
+                <span>{{ recActive && recTarget === 'studio' ? '⏹' : '🎤' }}</span>
+                <span>{{ recActive && recTarget === 'studio' ? `停止录音 (${recElapsed}s)` : '麦克风录音' }}</span>
+              </button>
+              <button
+                @click="transcribeRef('studio')"
+                :disabled="voiceBusy || !cloneAudioFile || (recActive && recTarget === 'studio')"
+                class="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] border bg-slate-800/60 border-slate-700 text-slate-300 hover:text-white disabled:opacity-40 transition"
+                title="Whisper ASR 自动转写参考音频台词"
+              >
+                <span>🪄</span>
+                <span>自动识别台词</span>
+              </button>
+            </div>
+            <input
+              type="text"
+              v-model="newVoiceName"
+              placeholder="角色名，例如: 杨总"
+              :disabled="voiceBusy"
+              class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+            />
+            <input
+              type="text"
+              v-model="cloneRefText"
+              placeholder="参考音频台词 (可选，留空自动转写)"
+              :disabled="voiceBusy"
+              class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-3 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+            />
+            <button
+              @click="createVoiceFromAudio"
+              :disabled="voiceBusy || !cloneAudioFile"
+              class="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 text-white font-semibold py-2 px-4 rounded-lg shadow-lg shadow-emerald-600/20 transition text-xs"
+            >
+              <span v-if="voiceBusy" class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+              <span v-else>🎙️</span>
+              {{ voiceBusy ? voiceStatus || '处理中...' : '生成并保存角色' }}
+            </button>
+          </div>
+
+          <!-- Voice management status -->
+          <div v-if="voiceStatus && !voiceBusy" class="text-[11px] leading-relaxed" :class="voiceStatus.startsWith('❌') ? 'text-red-300' : 'text-emerald-300'">
+            {{ voiceStatus }}
           </div>
         </div>
       </div>
@@ -413,6 +713,129 @@
         </div>
       </div>
     </section>
+    </div>
+
+    <!-- ===================== Area 3: Voice Design ===================== -->
+    <section v-show="activeTab === 'design'" class="space-y-5">
+      <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg space-y-4">
+        <div class="flex items-center justify-between pb-2 border-b border-slate-800/80">
+          <h2 class="text-sm font-semibold text-slate-200 flex items-center gap-2">
+            <span>🎨</span> 声音设计 · 属性组合定制虚拟音色
+          </h2>
+          <span class="text-[11px] text-slate-500">无需参考音频，自由组合以下属性</span>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-1.5">
+            <label class="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+              <span>📝</span> 待合成的目标文本
+            </label>
+          </div>
+          <textarea
+            v-model="designText"
+            rows="5"
+            placeholder="输入要合成的文本...&#10;支持长文本，超过约 12 秒会自动分块无缝拼接。"
+            class="w-full bg-darkInput border border-slate-700/80 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 leading-relaxed resize-y placeholder:text-slate-500"
+          ></textarea>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[11px] text-slate-500">快捷:</span>
+          <button
+            v-for="q in langQuick"
+            :key="q.v"
+            @click="designLang = q.v"
+            class="px-2.5 py-1 rounded-md text-[11px] border transition"
+            :class="designLang === q.v ? 'bg-indigo-600 border-indigo-500 text-white font-semibold' : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-white'"
+          >
+            {{ q.label }}
+          </button>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-400 mb-1">发音语言 (⭐ 收藏常用 · 600+ 全量)</label>
+            <div class="flex items-center gap-1.5">
+              <select v-model="designLang" class="flex-1 min-w-0 bg-darkInput border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+                <optgroup label="⭐ 常用语种">
+                  <option v-for="l in pinnedLangs" :key="'pin_' + l" :value="l">{{ l === 'Auto' ? '🌐 Auto (自动)' : l }}</option>
+                </optgroup>
+                <optgroup label="全部语言 (600+)">
+                  <option v-for="l in restLangs" :key="l" :value="l">{{ l }}</option>
+                </optgroup>
+              </select>
+              <button
+                @click="toggleStarLang(designLang)"
+                :disabled="designLang === 'Auto'"
+                :title="isLangStarred(designLang) ? '从常用语种移除' : '把当前语种加入常用'"
+                class="shrink-0 w-7 h-7 flex items-center justify-center rounded-md border text-sm transition"
+                :class="isLangStarred(designLang) ? 'bg-amber-500/20 border-amber-500/50 text-amber-300' : 'bg-slate-800/60 border-slate-700 text-slate-500 hover:text-amber-300'"
+              >{{ isLangStarred(designLang) ? '⭐' : '☆' }}</button>
+            </div>
+          </div>
+          <div>
+            <div class="flex justify-between text-xs font-medium text-slate-400 mb-1">
+              <span>语速</span>
+              <span class="text-indigo-400 font-mono font-bold">{{ designSpeed }}x</span>
+            </div>
+            <input type="range" v-model.number="designSpeed" min="0.5" max="1.5" step="0.05" class="w-full accent-indigo-500 cursor-pointer h-2 bg-slate-700 rounded-lg mt-2" />
+          </div>
+          <div>
+            <div class="flex justify-between text-xs font-medium text-slate-400 mb-1">
+              <span>🎭 抑扬顿挫</span>
+              <span class="text-indigo-400 font-mono font-bold">{{ designDyn }}</span>
+            </div>
+            <input type="range" v-model.number="designDyn" min="0" max="0.8" step="0.05" class="w-full accent-indigo-500 cursor-pointer h-2 bg-slate-700 rounded-lg mt-2" />
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[11px] text-slate-500">预设:</span>
+          <button
+            v-for="p in dynPresets"
+            :key="p.v"
+            @click="designDyn = p.v"
+            class="px-2.5 py-1 rounded-md text-[11px] border transition"
+            :class="designDyn === p.v ? 'bg-indigo-600 border-indigo-500 text-white font-semibold' : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-white'"
+          >
+            {{ p.label }} ({{ p.v }})
+          </button>
+        </div>
+
+        <!-- Attribute categories -->
+        <div v-if="designCats.length" class="grid grid-cols-2 md:grid-cols-3 gap-3 pt-1 border-t border-slate-800/80">
+          <div v-for="cat in designCats" :key="cat.key">
+            <label class="block text-xs font-medium text-slate-400 mb-1" :title="cat.info || ''">{{ cat.label }}</label>
+            <select v-model="designAttrs[cat.key]" class="w-full bg-darkInput border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500">
+              <option value="">自动</option>
+              <option v-for="opt in cat.options" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-3 pt-1">
+          <button
+            @click="generateDesign"
+            :disabled="designBusy || !designText.trim()"
+            class="flex-1 flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 disabled:opacity-50 text-white font-semibold py-2.5 px-5 rounded-lg shadow-lg shadow-indigo-600/30 transition text-sm"
+          >
+            <span v-if="designBusy" class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+            <span v-else>🎨</span>
+            {{ designBusy ? '正在合成中...' : '生成声音' }}
+          </button>
+        </div>
+
+        <div v-if="designStatus" class="text-[11px] leading-relaxed" :class="designStatus.startsWith('❌') ? 'text-red-300' : 'text-emerald-300'">
+          {{ designStatus }}
+        </div>
+
+        <!-- Design result -->
+        <div v-if="designResult" class="bg-slate-900/80 border border-indigo-500/20 rounded-lg p-3 flex items-center gap-3">
+          <audio controls :src="designResult.audio_url" preload="auto" class="flex-1 h-8"></audio>
+          <span class="text-[11px] text-slate-400 font-mono shrink-0">{{ designResult.duration }}s</span>
+        </div>
+      </div>
+    </section>
 
   </div>
 
@@ -482,6 +905,360 @@
         const selectedVoiceInfo = computed(() => {
           return voices.value.find(v => v.filename === globalRole.value);
         });
+
+        // Voice management state (upload .pt / clone from audio)
+        const voiceBusy = ref(false);
+        const voiceStatus = ref('');
+        const cloneAudioFile = ref(null);
+        const newVoiceName = ref('');
+        const cloneRefText = ref('');
+
+        const selectVoice = (filename) => {
+          if (filename) globalRole.value = filename;
+        };
+
+        const uploadPtFile = async (e) => {
+          const f = e.target.files[0];
+          if (!f || voiceBusy.value) return;
+          voiceBusy.value = true;
+          voiceStatus.value = `⏳ 正在上传 ${f.name} ...`;
+          try {
+            const fd = new FormData();
+            fd.append('file', f);
+            const res = await fetch('/api/upload_voice', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '上传失败');
+            await fetchVoices();
+            selectVoice(data.filename);
+            voiceStatus.value = `✅ 角色「${data.filename}」已保存 (${data.size_kb} KB)`;
+          } catch (err) {
+            voiceStatus.value = '❌ ' + err.message;
+          } finally {
+            voiceBusy.value = false;
+            e.target.value = '';
+          }
+        };
+
+        const createVoiceFromAudio = async () => {
+          if (!cloneAudioFile.value || voiceBusy.value) return;
+          voiceBusy.value = true;
+          voiceStatus.value = '⏳ 正在提取声纹特征... 首次使用需加载模型，约 30-60 秒';
+          try {
+            const fd = new FormData();
+            fd.append('file', cloneAudioFile.value);
+            if (newVoiceName.value.trim()) fd.append('name', newVoiceName.value.trim());
+            if (cloneRefText.value.trim()) fd.append('ref_text', cloneRefText.value.trim());
+            const res = await fetch('/api/create_voice', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '音色创建失败');
+            await fetchVoices();
+            selectVoice(data.filename);
+            voiceStatus.value = `✅ 新角色「${data.filename}」已保存 (${data.est_seconds}s 特征)`;
+            cloneAudioFile.value = null;
+            newVoiceName.value = '';
+            cloneRefText.value = '';
+            const input = document.getElementById('cloneAudioInput');
+            if (input) input.value = '';
+          } catch (err) {
+            voiceStatus.value = '❌ ' + err.message;
+          } finally {
+            voiceBusy.value = false;
+          }
+        };
+
+        // Area tabs (clone / studio / design)
+        const activeTab = ref('studio');
+        const tabs = [
+          { key: 'clone', icon: '🎙️', label: '声音克隆' },
+          { key: 'studio', icon: '✂️', label: '分句配音工作室' },
+          { key: 'design', icon: '🎨', label: '声音设计' },
+        ];
+
+        // Shared expressiveness (class_temperature) presets, same as Gradio demo
+        const dynPresets = [
+          { label: '平缓叙述', v: 0.0 },
+          { label: '自然抑扬', v: 0.35 },
+          { label: '生动起伏', v: 0.55 },
+          { label: '充沛高昂', v: 0.75 },
+        ];
+
+        // Quick language pills (same as Gradio demo)
+        const langQuick = [
+          { label: '🌐 自动检测', v: 'Auto' },
+          { label: '🇨🇳 中文', v: 'Chinese' },
+          { label: '🇬🇧 英文', v: 'English' },
+        ];
+
+        // Full supported language list (600+, mirrors the Gradio demo)
+        const languages = ref(['Auto']);
+        const fetchLanguages = async () => {
+          try {
+            const res = await fetch('/api/languages');
+            const data = await res.json();
+            if (Array.isArray(data.languages) && data.languages.length > 1) {
+              languages.value = data.languages;
+            }
+          } catch (e) {
+            console.error('Fetch languages error:', e);
+          }
+        };
+
+        // Pinned common languages: fixed defaults + user-starred (persisted)
+        const LANG_STAR_KEY = 'omnivoice_starred_langs';
+        const DEFAULT_PINNED = ['Auto', 'Chinese', 'English', 'Cantonese', 'Japanese', 'Korean'];
+        const starredLangs = ref([]);
+        try {
+          const saved = JSON.parse(localStorage.getItem(LANG_STAR_KEY) || '[]');
+          if (Array.isArray(saved)) starredLangs.value = saved.filter(x => typeof x === 'string');
+        } catch (e) { /* corrupted storage — start fresh */ }
+
+        const pinnedLangs = computed(() => {
+          const base = DEFAULT_PINNED.filter(l => l === 'Auto' || languages.value.includes(l));
+          const extra = starredLangs.value.filter(l => languages.value.includes(l) && !base.includes(l));
+          return [...base, ...extra];
+        });
+        const restLangs = computed(() => languages.value.filter(l => !pinnedLangs.value.includes(l)));
+        const isLangStarred = (l) => starredLangs.value.includes(l);
+        const toggleStarLang = (l) => {
+          if (!l || l === 'Auto') return;
+          const i = starredLangs.value.indexOf(l);
+          if (i >= 0) starredLangs.value.splice(i, 1);
+          else starredLangs.value.push(l);
+          localStorage.setItem(LANG_STAR_KEY, JSON.stringify(starredLangs.value));
+        };
+
+        // ---- Microphone recording: capture PCM and encode WAV in-browser ----
+        const recActive = ref(false);
+        const recTarget = ref(null);
+        const recElapsed = ref(0);
+        let recStream = null;
+        let recCtx = null;
+        let recProcessor = null;
+        let recSource = null;
+        let recChunks = [];
+        let recTimer = null;
+
+        const encodeWav = (samples, sampleRate) => {
+          const view = new DataView(new ArrayBuffer(44 + samples.length * 2));
+          const wstr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+          wstr(0, 'RIFF'); view.setUint32(4, 36 + samples.length * 2, true); wstr(8, 'WAVE');
+          wstr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+          view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+          view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+          wstr(36, 'data'); view.setUint32(40, samples.length * 2, true);
+          let off = 44;
+          for (let i = 0; i < samples.length; i++, off += 2) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+          }
+          return new Blob([view], { type: 'audio/wav' });
+        };
+
+        const stopRecording = () => {
+          if (!recActive.value) return;
+          clearInterval(recTimer);
+          const rate = recCtx ? recCtx.sampleRate : 44100;
+          try {
+            recProcessor.disconnect();
+            recSource.disconnect();
+            recStream.getTracks().forEach(t => t.stop());
+            recCtx.close();
+          } catch (e) {
+            console.error('Recording cleanup error:', e);
+          }
+          const total = recChunks.reduce((a, c) => a + c.length, 0);
+          const merged = new Float32Array(total);
+          let off = 0;
+          recChunks.forEach(c => { merged.set(c, off); off += c.length; });
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+          const file = new File([encodeWav(merged, rate)], `录音_${stamp}.wav`, { type: 'audio/wav' });
+          const inputId = recTarget.value === 'clone' ? 'cloneTabAudioInput' : 'cloneAudioInput';
+          const input = document.getElementById(inputId);
+          if (input && typeof DataTransfer !== 'undefined') {
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            input.files = dt.files;
+          }
+          if (recTarget.value === 'clone') {
+            cloneTabFile.value = file;
+            cloneTabStatus.value = `🎙️ 录音完成 (${recElapsed.value}s)。可生成试听、自动识别台词或保存角色。`;
+          } else {
+            cloneAudioFile.value = file;
+            voiceStatus.value = `🎙️ 录音完成 (${recElapsed.value}s)，可保存为新角色。`;
+          }
+          recActive.value = false;
+          recTarget.value = null;
+        };
+
+        const toggleRecording = async (target) => {
+          if (recActive.value && recTarget.value === target) {
+            stopRecording();
+            return;
+          }
+          if (recActive.value) return;
+          try {
+            recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            recCtx = new (window.AudioContext || window.webkitAudioContext)();
+            recSource = recCtx.createMediaStreamSource(recStream);
+            recProcessor = recCtx.createScriptProcessor(4096, 1, 1);
+            recChunks = [];
+            recProcessor.onaudioprocess = (e) => {
+              recChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+            };
+            recSource.connect(recProcessor);
+            recProcessor.connect(recCtx.destination);
+            recActive.value = true;
+            recTarget.value = target;
+            recElapsed.value = 0;
+            recTimer = setInterval(() => { recElapsed.value++; }, 1000);
+          } catch (e) {
+            console.error('Recording error:', e);
+            alert('无法访问麦克风: ' + (e.message || e.name));
+          }
+        };
+
+        // Whisper ASR transcription of the current reference audio
+        const transcribeRef = async (target) => {
+          const file = target === 'clone' ? cloneTabFile.value : cloneAudioFile.value;
+          if (!file) return;
+          if (target === 'clone') {
+            cloneTabStatus.value = '⏳ 正在 Whisper 转写参考音频... 首次使用需加载模型';
+          } else {
+            voiceStatus.value = '⏳ 正在 Whisper 转写参考音频... 首次使用需加载模型';
+          }
+          try {
+            const fd = new FormData();
+            fd.append('file', file);
+            const res = await fetch('/api/asr_transcribe', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '转写失败');
+            const preview = data.text.length > 40 ? data.text.slice(0, 40) + '…' : data.text;
+            if (target === 'clone') {
+              cloneTabRefText.value = data.text;
+              cloneTabStatus.value = `✅ 台词识别完成: "${preview}"`;
+            } else {
+              cloneRefText.value = data.text;
+              voiceStatus.value = `✅ 台词识别完成: "${preview}"`;
+            }
+          } catch (e) {
+            if (target === 'clone') cloneTabStatus.value = '❌ ' + e.message;
+            else voiceStatus.value = '❌ ' + e.message;
+          }
+        };
+
+        // ---- Voice Clone area state ----
+        const cloneTabFile = ref(null);
+        const cloneTabRefText = ref('');
+        const cloneTabSaveName = ref('');
+        const cloneTabText = ref('');
+        const cloneTabLang = ref('Auto');
+        const cloneTabSpeed = ref(1.0);
+        const cloneTabDyn = ref(0.35);
+        const cloneTabInstruct = ref('');
+        const cloneBusy = ref(false);
+        const cloneTabStatus = ref('');
+        const cloneResult = ref(null);
+
+        const generateClone = async () => {
+          if (!cloneTabFile.value || !cloneTabText.value.trim() || cloneBusy.value) return;
+          cloneBusy.value = true;
+          cloneResult.value = null;
+          cloneTabStatus.value = '⏳ 正在提取声纹并合成... 首次使用需加载模型，约 30-60 秒';
+          try {
+            const fd = new FormData();
+            fd.append('file', cloneTabFile.value);
+            fd.append('text', cloneTabText.value);
+            if (cloneTabRefText.value.trim()) fd.append('ref_text', cloneTabRefText.value.trim());
+            if (cloneTabLang.value !== 'Auto') fd.append('lang', cloneTabLang.value);
+            fd.append('speed', cloneTabSpeed.value);
+            if (cloneTabInstruct.value.trim()) fd.append('instruct', cloneTabInstruct.value.trim());
+            fd.append('class_temperature', cloneTabDyn.value);
+            const res = await fetch('/api/clone_generate', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '克隆合成失败');
+            cloneResult.value = data;
+            cloneTabStatus.value = `✅ 合成完成，时长 ${data.duration} 秒。可试听后保存为角色。`;
+          } catch (err) {
+            cloneTabStatus.value = '❌ ' + err.message;
+          } finally {
+            cloneBusy.value = false;
+          }
+        };
+
+        const saveCloneRole = async () => {
+          if (!cloneTabFile.value || cloneBusy.value) return;
+          cloneBusy.value = true;
+          cloneTabStatus.value = '⏳ 正在保存角色...';
+          try {
+            const fd = new FormData();
+            fd.append('file', cloneTabFile.value);
+            if (cloneTabSaveName.value.trim()) fd.append('name', cloneTabSaveName.value.trim());
+            if (cloneTabRefText.value.trim()) fd.append('ref_text', cloneTabRefText.value.trim());
+            const res = await fetch('/api/create_voice', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '保存角色失败');
+            await fetchVoices();
+            selectVoice(data.filename);
+            globalRole.value = data.filename;
+            cloneTabStatus.value = `✅ 角色「${data.filename}」已保存，可在分句配音工作室调用。`;
+          } catch (err) {
+            cloneTabStatus.value = '❌ ' + err.message;
+          } finally {
+            cloneBusy.value = false;
+          }
+        };
+
+        // ---- Voice Design area state ----
+        const designText = ref('');
+        const designLang = ref('Auto');
+        const designSpeed = ref(1.0);
+        const designDyn = ref(0.35);
+        const designAttrs = ref({});
+        const designCats = ref([]);
+        const designBusy = ref(false);
+        const designStatus = ref('');
+        const designResult = ref(null);
+
+        const fetchDesignCats = async () => {
+          try {
+            const res = await fetch('/api/design_categories');
+            const data = await res.json();
+            designCats.value = data.categories || [];
+            const attrs = {};
+            designCats.value.forEach(c => { attrs[c.key] = ''; });
+            designAttrs.value = attrs;
+          } catch (e) {
+            console.error('Fetch design categories error:', e);
+          }
+        };
+
+        const generateDesign = async () => {
+          if (!designText.value.trim() || designBusy.value) return;
+          designBusy.value = true;
+          designResult.value = null;
+          designStatus.value = '⏳ 正在按属性合成... 首次使用需加载模型，约 30-60 秒';
+          try {
+            const res = await fetch('/api/design_generate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                text: designText.value,
+                attributes: Object.values(designAttrs.value).filter(v => v),
+                lang: designLang.value === 'Auto' ? null : designLang.value,
+                speed: designSpeed.value,
+                class_temperature: designDyn.value,
+              })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || '声音设计失败');
+            designResult.value = data;
+            designStatus.value = `✅ 合成完成，时长 ${data.duration} 秒。`;
+          } catch (err) {
+            designStatus.value = '❌ ' + err.message;
+          } finally {
+            designBusy.value = false;
+          }
+        };
 
         // Computed progress
         const completedCount = computed(() => {
@@ -689,9 +1466,48 @@
 
         onMounted(() => {
           fetchVoices();
+          fetchDesignCats();
+          fetchLanguages();
         });
 
         return {
+          activeTab,
+          tabs,
+          dynPresets,
+          langQuick,
+          languages,
+          pinnedLangs,
+          restLangs,
+          isLangStarred,
+          toggleStarLang,
+          recActive,
+          recTarget,
+          recElapsed,
+          toggleRecording,
+          transcribeRef,
+          cloneTabFile,
+          cloneTabRefText,
+          cloneTabSaveName,
+          cloneTabText,
+          cloneTabLang,
+          cloneTabSpeed,
+          cloneTabDyn,
+          cloneTabInstruct,
+          cloneBusy,
+          cloneTabStatus,
+          cloneResult,
+          generateClone,
+          saveCloneRole,
+          designText,
+          designLang,
+          designSpeed,
+          designDyn,
+          designAttrs,
+          designCats,
+          designBusy,
+          designStatus,
+          designResult,
+          generateDesign,
           voices,
           globalRole,
           targetLang,
@@ -703,6 +1519,13 @@
           statusText,
           downloadUrl,
           selectedVoiceInfo,
+          voiceBusy,
+          voiceStatus,
+          cloneAudioFile,
+          newVoiceName,
+          cloneRefText,
+          uploadPtFile,
+          createVoiceFromAudio,
           completedCount,
           progressPercent,
           pageSize,
