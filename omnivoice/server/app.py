@@ -116,6 +116,7 @@ class BatchSynthesizeRequest(BaseModel):
     speed: float = 1.0
     instruct: Optional[str] = None
     lang: Optional[str] = None
+    force: bool = False
 
 
 class SingleSynthesizeRequest(BaseModel):
@@ -189,6 +190,134 @@ def _save_generated_wave(waveform, sampling_rate: int) -> Dict[str, Any]:
         "audio_url": f"/api/audio/{task_id}/{filename}",
         "duration": duration,
     }
+
+
+def _task_state_path(task_id: str) -> str:
+    return os.path.join(CACHE_TMP_DIR, task_id, "task_state.json")
+
+
+def _load_task_state(task_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        with open(_task_state_path(task_id), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _save_task_state(task_id: str, entries: List[Dict[str, Any]], meta: Dict[str, Any]) -> None:
+    """Persist per-sentence results so tasks can resume after server restarts."""
+    path = _task_state_path(task_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"meta": meta, "items": entries}, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def _item_from_disk(task_id: str, entry: Dict[str, Any]) -> Optional[SentenceItem]:
+    filename = os.path.basename(entry.get("filename") or "")
+    if not filename:
+        return None
+    wav_path = os.path.join(CACHE_TMP_DIR, task_id, filename)
+    if not os.path.isfile(wav_path):
+        return None
+    try:
+        wav, sr = sf.read(wav_path, dtype="float32")
+    except Exception:
+        return None
+    if wav.ndim > 1:
+        wav = wav.squeeze()
+    duration = float(entry.get("duration") or 0) or len(wav) / max(int(sr), 1)
+    return SentenceItem(
+        index=int(entry.get("index", 0)),
+        text=entry.get("text", ""),
+        raw_text=entry.get("text", ""),
+        sample_rate=int(sr),
+        waveform=wav,
+        duration=duration,
+        status="done",
+        role_name=entry.get("role_name"),
+    )
+
+
+def _items_from_task_state(task_id: str) -> List[SentenceItem]:
+    state = _load_task_state(task_id)
+    if not state:
+        return []
+    items = [it for it in (_item_from_disk(task_id, e) for e in state.get("items", [])) if it]
+    items.sort(key=lambda x: x.index)
+    return items
+
+
+def _request_meta(req: "BatchSynthesizeRequest") -> Dict[str, Any]:
+    return {
+        "global_role": req.global_role,
+        "speed": req.speed,
+        "instruct": req.instruct,
+        "lang": req.lang,
+    }
+
+
+def _meta_matches(saved: Any, meta: Dict[str, Any]) -> bool:
+    if not isinstance(saved, dict):
+        return False
+    try:
+        speed_ok = float(saved.get("speed")) == float(meta["speed"])
+    except (TypeError, ValueError):
+        speed_ok = False
+    return (
+        speed_ok
+        and saved.get("global_role") == meta["global_role"]
+        and saved.get("instruct") == meta["instruct"]
+        and saved.get("lang") == meta["lang"]
+    )
+
+
+def _upsert_entry(entries: List[Dict[str, Any]], entry: Dict[str, Any]) -> None:
+    entries[:] = [e for e in entries if e.get("index") != entry["index"]]
+    entries.append(entry)
+    entries.sort(key=lambda e: e.get("index", 0))
+
+
+def _find_cached_item(
+    task_id: str,
+    index: int,
+    text: str,
+    assigned_role: Optional[str],
+    meta: Dict[str, Any],
+) -> Optional[SentenceItem]:
+    """Reuse a previous done result (same index/text/role/settings) for resume."""
+    store = _TASK_STORE.get(task_id)
+    if store and _meta_matches(store, meta):
+        for it in store.get("items", []):
+            if (
+                it.index == index
+                and it.raw_text == text
+                and it.status == "done"
+                and it.waveform is not None
+                and it.role_name == assigned_role
+            ):
+                return it
+
+    state = _load_task_state(task_id)
+    if state and _meta_matches(state.get("meta"), meta):
+        for entry in state.get("items", []):
+            if (
+                entry.get("index") == index
+                and entry.get("text") == text
+                and entry.get("role_name") == assigned_role
+            ):
+                item = _item_from_disk(task_id, entry)
+                if item is None:
+                    return None
+                store = _TASK_STORE.setdefault(task_id, {"items": []})
+                merged = [e for e in store.get("items", []) if e.index != index]
+                merged.append(item)
+                merged.sort(key=lambda x: x.index)
+                store["items"] = merged
+                return item
+    return None
 
 
 def _generate_once(
@@ -319,12 +448,20 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
         zip_path = task_info.get("zip_path") if task_info else None
 
         if not zip_path or not os.path.isfile(zip_path):
-            # Try to build zip on the fly if task dir exists
+            # Try to rebuild: zip on disk (survives restarts), memory store, or task_state.json + wavs
             task_dir = os.path.join(CACHE_TMP_DIR, safe_task)
-            if os.path.isdir(task_dir) and task_info and "items" in task_info:
-                zip_path = os.path.join(CACHE_TMP_DIR, f"sentence_studio_{safe_task}.zip")
-                pack_sentence_audio_zip(task_info["items"], zip_path)
-            else:
+            default_zip = os.path.join(CACHE_TMP_DIR, f"sentence_studio_{safe_task}.zip")
+            if os.path.isfile(default_zip):
+                zip_path = default_zip
+            elif os.path.isdir(task_dir):
+                if task_info and task_info.get("items"):
+                    rebuild_items = task_info["items"]
+                else:
+                    rebuild_items = _items_from_task_state(safe_task)
+                if rebuild_items:
+                    zip_path = default_zip
+                    pack_sentence_audio_zip(rebuild_items, zip_path, include_manifest=False)
+            if not zip_path or not os.path.isfile(zip_path):
                 raise HTTPException(status_code=404, detail="ZIP archive not found or expired.")
 
         return FileResponse(
@@ -346,11 +483,18 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
         os.makedirs(task_dir, exist_ok=True)
 
         async def sse_generator():
-            engine = get_engine()
-            model = get_model()
-            sampling_rate = model.sampling_rate
+            # Model/engine load lazily so pure cache-hit resumes stay instant
+            model_holder: Dict[str, Any] = {}
+            prompt_cache: Dict[str, Any] = {}
 
-            # Resolve global prompt
+            def _ensure_model():
+                if "model" not in model_holder:
+                    engine = get_engine()
+                    m = get_model()
+                    model_holder.update(model=m, engine=engine, sampling_rate=m.sampling_rate)
+                return model_holder["model"], model_holder["engine"], model_holder["sampling_rate"]
+
+            # Resolve global role path (no model load needed for cache hits)
             global_pt = _resolve_pt_path(req.global_role)
             if not global_pt and req.global_role:
                 global_pt = _resolve_pt_path(req.global_role + ".pt")
@@ -364,11 +508,17 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
                 yield f"event: error\ndata: {json.dumps({'error': 'No valid role .pt file found.'})}\n\n"
                 return
 
-            global_prompt = engine.get_role_prompt(global_pt)
             lang_param = None if req.lang in (None, "Auto", "auto") else req.lang
 
             items: List[SentenceItem] = []
             total = len(req.sentences)
+
+            meta = _request_meta(req)
+            prev_state = _load_task_state(task_id)
+            if req.force or not _meta_matches(prev_state.get("meta") if prev_state else None, meta):
+                state_entries: List[Dict[str, Any]] = []
+            else:
+                state_entries = list(prev_state.get("items", []))
 
             yield f"event: start\ndata: {json.dumps({'task_id': task_id, 'total': total})}\n\n"
 
@@ -378,22 +528,33 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
                 if not text:
                     continue
 
+                # Check custom role vs global (path only; prompt resolved lazily)
+                custom_pt = None
+                role_name = s_in.role
+                if role_name and role_name not in ("跟随全局默认角色", "Follow Global Role"):
+                    candidate = _resolve_pt_path(role_name) or _resolve_pt_path(role_name + ".pt")
+                    if candidate and os.path.isfile(candidate):
+                        custom_pt = candidate
+                prompt_path = custom_pt or global_pt
+                assigned_role = os.path.basename(prompt_path)
+
+                # Resume: reuse existing audio for unchanged sentences unless forced
+                if not req.force:
+                    cached = _find_cached_item(task_id, idx, text, assigned_role, meta)
+                    if cached is not None:
+                        if not any(it.index == idx for it in items):
+                            items.append(cached)
+                        cached_filename = f"{cached.safe_filename_prefix}.wav"
+                        yield f"event: sentence\ndata: {json.dumps({'index': idx, 'status': 'done', 'duration': round(cached.duration, 2), 'audio_url': f'/api/audio/{task_id}/{cached_filename}'})}\n\n"
+                        continue
+
                 # Yield generating status
                 yield f"event: progress\ndata: {json.dumps({'index': idx, 'status': 'generating'})}\n\n"
 
-                # Check custom role vs global
-                role_name = s_in.role
-                if role_name and role_name not in ("跟随全局默认角色", "Follow Global Role"):
-                    custom_pt = _resolve_pt_path(role_name) or _resolve_pt_path(role_name + ".pt")
-                    if custom_pt and os.path.isfile(custom_pt):
-                        prompt_to_use = engine.get_role_prompt(custom_pt)
-                        assigned_role = os.path.basename(custom_pt)
-                    else:
-                        prompt_to_use = global_prompt
-                        assigned_role = os.path.basename(global_pt)
-                else:
-                    prompt_to_use = global_prompt
-                    assigned_role = os.path.basename(global_pt)
+                model, engine, sampling_rate = _ensure_model()
+                if prompt_path not in prompt_cache:
+                    prompt_cache[prompt_path] = engine.get_role_prompt(prompt_path)
+                prompt_to_use = prompt_cache[prompt_path]
 
                 # Synthesize on thread
                 def _do_gen(p, t, l, sp, ins):
@@ -435,6 +596,15 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
                     sf.write(filepath, int16_wave, sampling_rate)
 
                     items.append(item)
+                    _upsert_entry(state_entries, {
+                        "index": idx,
+                        "text": text,
+                        "filename": filename,
+                        "duration": round(dur, 2),
+                        "role_name": assigned_role,
+                        "sample_rate": sampling_rate,
+                    })
+                    _save_task_state(task_id, state_entries, meta)
                     audio_url = f"/api/audio/{task_id}/{filename}"
 
                     yield f"event: sentence\ndata: {json.dumps({'index': idx, 'status': 'done', 'duration': round(dur, 2), 'audio_url': audio_url})}\n\n"
@@ -443,8 +613,9 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
                     yield f"event: sentence\ndata: {json.dumps({'index': idx, 'status': 'error', 'error': str(e)})}\n\n"
 
             # Package ZIP
+            items.sort(key=lambda x: x.index)
             zip_filename = os.path.join(CACHE_TMP_DIR, f"sentence_studio_{task_id}.zip")
-            pack_sentence_audio_zip(items, zip_filename)
+            pack_sentence_audio_zip(items, zip_filename, include_manifest=False)
 
             _TASK_STORE[task_id] = {
                 "items": items,
@@ -547,8 +718,27 @@ def create_app(model: Optional[OmniVoice] = None) -> FastAPI:
 
             # Re-pack ZIP
             zip_filename = os.path.join(CACHE_TMP_DIR, f"sentence_studio_{task_id}.zip")
-            pack_sentence_audio_zip(items, zip_filename)
+            pack_sentence_audio_zip(items, zip_filename, include_manifest=False)
             task_info["zip_path"] = zip_filename
+
+            # Persist to task_state.json so the result survives restarts
+            state = _load_task_state(task_id) or {"meta": {}, "items": []}
+            _upsert_entry(state.setdefault("items", []), {
+                "index": req.index,
+                "text": req.text.strip(),
+                "filename": filename,
+                "duration": round(dur, 2),
+                "role_name": os.path.basename(pt_path),
+                "sample_rate": sampling_rate,
+            })
+            if not state.get("meta"):
+                state["meta"] = {
+                    "global_role": task_info.get("global_role"),
+                    "speed": task_info.get("speed", req.speed),
+                    "instruct": task_info.get("instruct"),
+                    "lang": task_info.get("lang", req.lang),
+                }
+            _save_task_state(task_id, state["items"], state["meta"])
 
             return {
                 "index": req.index,

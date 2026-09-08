@@ -465,9 +465,9 @@
 
       <!-- Right Column: Script Input & Actions (8 Cols) -->
       <div class="lg:col-span-8 space-y-4">
-        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col justify-between h-full space-y-3">
-          <div>
-            <div class="flex justify-between items-center mb-1.5">
+        <div class="bg-darkCard/90 border border-slate-800 rounded-xl p-4 shadow-lg flex flex-col h-full space-y-3">
+          <div class="flex flex-col flex-1 min-h-0">
+            <div class="flex justify-between items-center mb-1.5 shrink-0">
               <label class="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
                 <span>📝</span> 输入长文台词
               </label>
@@ -477,12 +477,12 @@
               v-model="rawScript"
               rows="6"
               placeholder="在此粘贴长篇台词...&#10;支持按行换行分句，一行就是一句话；&#10;标点中的逗号保持完整不硬拆；&#10;多余空行与杂乱空白会自动清洗对齐。"
-              class="w-full bg-darkInput border border-slate-700/80 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 font-sans leading-relaxed resize-y placeholder:text-slate-500"
+              class="w-full flex-1 min-h-[140px] bg-darkInput border border-slate-700/80 rounded-lg p-3 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 font-sans leading-relaxed resize-none placeholder:text-slate-500"
             ></textarea>
           </div>
 
           <!-- Action Buttons Bar -->
-          <div class="flex flex-wrap items-center gap-3 pt-1">
+          <div class="flex flex-wrap items-center gap-3 pt-1 shrink-0">
             <button
               @click="startBatchSynthesize"
               :disabled="isGenerating || !rawScript.trim()"
@@ -840,7 +840,7 @@
   </div>
 
   <script>
-    const { createApp, ref, computed, onMounted } = Vue;
+    const { createApp, ref, computed, onMounted, watch } = Vue;
 
     createApp({
       setup() {
@@ -1333,7 +1333,9 @@
           });
 
           try {
+            const allDone = sentences.value.length > 0 && sentences.value.every(s => s.status === 'done');
             const payload = {
+              task_id: currentTaskId.value || undefined,
               sentences: sentences.value.map(s => ({
                 index: s.index,
                 text: s.text,
@@ -1342,7 +1344,8 @@
               global_role: globalRole.value,
               speed: speed.value,
               instruct: instruct.value,
-              lang: targetLang.value
+              lang: targetLang.value,
+              force: allDone
             };
 
             const response = await fetch('/api/synthesize_batch', {
@@ -1461,10 +1464,122 @@
           sentences.value = [];
           currentPage.value = 1;
           downloadUrl.value = null;
+          currentTaskId.value = null;
           statusText.value = '已清空重置。';
         };
 
+        // 7. Session persistence: survive browser refresh / crash without re-generating
+        const STUDIO_KEY = 'omnivoice_studio_state_v1';
+
+        const saveStudioState = () => {
+          try {
+            localStorage.setItem(STUDIO_KEY, JSON.stringify({
+              rawScript: rawScript.value,
+              sentences: sentences.value.map(s => ({
+                index: s.index,
+                text: s.text,
+                role: s.role,
+                status: s.status,
+                audio_url: s.audio_url,
+                duration: s.duration,
+              })),
+              taskId: currentTaskId.value,
+              downloadUrl: downloadUrl.value,
+              globalRole: globalRole.value,
+              targetLang: targetLang.value,
+              speed: speed.value,
+              instruct: instruct.value,
+              activeTab: activeTab.value,
+              pageSize: pageSize.value,
+              cloneTabText: cloneTabText.value,
+              designText: designText.value,
+            }));
+          } catch (e) { /* storage unavailable — skip */ }
+        };
+
+        let saveTimer = null;
+        const scheduleSave = () => {
+          clearTimeout(saveTimer);
+          saveTimer = setTimeout(saveStudioState, 300);
+        };
+        watch(
+          [rawScript, sentences, currentTaskId, downloadUrl, globalRole, targetLang, speed, instruct, activeTab, pageSize, cloneTabText, designText],
+          scheduleSave,
+          { deep: true }
+        );
+
+        const restoreStudioState = async () => {
+          let saved = null;
+          try {
+            saved = JSON.parse(localStorage.getItem(STUDIO_KEY) || 'null');
+          } catch (e) { saved = null; }
+          if (!saved) return;
+
+          rawScript.value = saved.rawScript || '';
+          globalRole.value = saved.globalRole || '';
+          targetLang.value = saved.targetLang || 'Auto';
+          speed.value = typeof saved.speed === 'number' ? saved.speed : 1.0;
+          instruct.value = saved.instruct || '';
+          activeTab.value = saved.activeTab || 'studio';
+          pageSize.value = saved.pageSize || 10;
+          cloneTabText.value = saved.cloneTabText || '';
+          designText.value = saved.designText || '';
+          currentTaskId.value = saved.taskId || null;
+          downloadUrl.value = saved.downloadUrl || null;
+          sentences.value = (saved.sentences || []).map((s, i) => {
+            const alive = s.status === 'done' && !!s.audio_url;
+            return {
+              index: s.index || i + 1,
+              text: s.text || '',
+              role: s.role || '跟随全局默认角色',
+              status: alive ? 'done' : 'pending',
+              audio_url: alive ? s.audio_url : null,
+              duration: alive ? (s.duration || 0) : 0,
+            };
+          });
+          currentPage.value = 1;
+
+          if (!sentences.value.length) return;
+          statusText.value = `♻️ 已恢复上次进度 (${sentences.value.length} 句)，正在校验音频...`;
+
+          // Verify cached audio still exists on the server; drop broken ones
+          const checks = await Promise.all(sentences.value.map(async (s) => {
+            if (s.status !== 'done' || !s.audio_url) return false;
+            try {
+              const r = await fetch(s.audio_url, { method: 'HEAD' });
+              return r.ok;
+            } catch (e) { return false; }
+          }));
+          let broken = 0;
+          sentences.value.forEach((s, i) => {
+            if (s.status === 'done' && !checks[i]) {
+              s.status = 'pending';
+              s.audio_url = null;
+              s.duration = 0;
+              broken++;
+            }
+          });
+
+          if (downloadUrl.value) {
+            try {
+              const r = await fetch(downloadUrl.value, { method: 'HEAD' });
+              if (!r.ok) downloadUrl.value = null;
+            } catch (e) { downloadUrl.value = null; }
+          }
+
+          const done = completedCount.value;
+          if (!sentences.value.length) return;
+          if (done > 0) {
+            statusText.value = broken
+              ? `♻️ 已恢复进度：${done}/${sentences.value.length} 句音频有效（${broken} 句已失效，将重新生成）。点击【批量生成】只补跑缺失句子。`
+              : `♻️ 已恢复进度：${done}/${sentences.value.length} 句已完成。点击【批量生成】只补跑未完成句子；全部完成后再点则整体重做。`;
+          } else {
+            statusText.value = '♻️ 已恢复上次台词，可重新批量生成。';
+          }
+        };
+
         onMounted(() => {
+          restoreStudioState();
           fetchVoices();
           fetchDesignCats();
           fetchLanguages();
