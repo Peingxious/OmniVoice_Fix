@@ -31,6 +31,12 @@
   - `start_studio_web.bat` 原生 Web 工作室启动脚本（端口 8002）
   - `tests/test_sentence_studio.py` & `tests/test_server_api.py` 自动化测试
   - `.project/spec.md`
+- **可移植整合包（Ticket 04，已 complete）**：
+  - `setup.bat`：用 `uv` 自管 Python 3.12 建 `.venv`，不依赖系统 Python；缺失 `uv` 自动安装，`uv sync` 装依赖
+  - `start_demo.bat` / `start_studio_web.bat`：`.venv` 缺失时自动 `call setup.bat` 引导
+  - `.hf_mirror`（空文件开关）：启用 HF 国内镜像加速首次模型下载
+  - `check_portable.bat` / `check_portable.py`：可移植性自检，缺什么给下载指引
+  - `INSTALL.md`：系统要求、双击即用、国内镜像、手动分步、可移植/打包、常见问题
 - **精确接续点**：
   1. 运行 `start_studio_web.bat` 体验全新的 **原生 Vue 3 单行极简 Web 工作室**（端口 8002，无 Canvas 负担，一键秒下载）。
   2. 运行 `start_demo.bat` 继续使用全功能 Gradio 多 Tab 综合控制台（端口 8001）。
