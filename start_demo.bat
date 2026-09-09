@@ -7,17 +7,25 @@ rem ===== 所有缓存/临时文件都锁在本文件夹内，不占用 C 盘 ==
 set "HF_HOME=%~dp0.cache\huggingface"
 set "HF_HUB_CACHE=%HF_HOME%\hub"
 set "HF_HUB_DISABLE_SYMLINKS_WARNING=1"
+
+rem 国内镜像加速：根目录存在 .hf_mirror 文件时，启用 HF 镜像（首次下载模型更快）
+if exist "%~dp0.hf_mirror" (
+    set "HF_ENDPOINT=https://hf-mirror.com"
+)
 set "GRADIO_TEMP_DIR=%~dp0.cache\gradio"
 set "TMP=%~dp0.cache\tmp"
 set "TEMP=%~dp0.cache\tmp"
 set "PYTHONIOENCODING=utf-8"
 
 if not exist ".venv\Scripts\python.exe" (
-    echo [错误] 未找到 .venv 虚拟环境
-    echo 请先在本目录执行:  uv sync
+    echo [提示] 未检测到 .venv，将自动创建虚拟环境并安装依赖...
     echo.
-    pause
-    exit /b 1
+    call "%~dp0setup.bat"
+    if not exist ".venv\Scripts\python.exe" (
+        echo [错误] 虚拟环境创建失败，请查看上方报错或手动运行 setup.bat
+        pause
+        exit /b 1
+    )
 )
 
 if not exist "%HF_HOME%" mkdir "%HF_HOME%"
